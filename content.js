@@ -19,8 +19,16 @@
     if (event.source !== window) return;
     const msg = event.data;
     if (!msg || msg.source !== "kpixel-page") return;
-    if (msg.type !== "lookup") return;
+    if (msg.type !== "lookup" && msg.type !== "usage") return;
     try {
+      if (msg.type === "usage") {
+        await chrome.runtime.sendMessage({
+          type: "RECORD_USAGE",
+          watchedIds: msg.watched || [],
+          blockedIds: msg.blocked || [],
+        });
+        return;
+      }
       const res = await chrome.runtime.sendMessage({
         type: "LOOKUP",
         channelIds: msg.channelIds,

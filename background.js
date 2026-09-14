@@ -10,6 +10,7 @@ const memory = {
   enabled: true,
   forceT: [],
   stats: { lookups: 0, hidden: 0, flagged: 0 },
+  usageDays: {},
 };
 
 const inflight = new Map();
@@ -27,11 +28,13 @@ async function loadState() {
     enabled: true,
     forceT: [],
     stats: { lookups: 0, hidden: 0, flagged: 0 },
+    usageDays: {},
   });
   memory.cache = stored.cache || {};
   memory.enabled = stored.enabled !== false;
   memory.forceT = Array.isArray(stored.forceT) ? stored.forceT : [];
   memory.stats = stored.stats || { lookups: 0, hidden: 0, flagged: 0 };
+  memory.usageDays = stored.usageDays || {};
 }
 
 function schedulePersist() {
@@ -42,6 +45,7 @@ function schedulePersist() {
       cache: memory.cache,
       enabled: memory.enabled,
       stats: memory.stats,
+      usageDays: memory.usageDays,
     });
   }, 400);
 }
@@ -140,6 +144,10 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       stats: memory.stats,
       cacheSize: Object.keys(memory.cache).length,
       flagged: Object.values(memory.cache).filter((r) => r.flag === "t").length,
+      usage: KPixel.summarizeUsage(
+        memory.usageDays,
+        KPixel.localDayKey()
+      ),
     });
     return false;
   }
@@ -163,6 +171,27 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     memory.stats.hidden = Number(message.count) || 0;
     schedulePersist();
     sendResponse({ ok: true });
+    return false;
+  }
+  if (type === "RECORD_USAGE") {
+    const day = KPixel.localDayKey();
+    KPixel.addUsageIds(
+      memory.usageDays,
+      day,
+      "watched",
+      message.watchedIds || []
+    );
+    KPixel.addUsageIds(
+      memory.usageDays,
+      day,
+      "blocked",
+      message.blockedIds || []
+    );
+    schedulePersist();
+    sendResponse({
+      ok: true,
+      usage: KPixel.summarizeUsage(memory.usageDays, day),
+    });
     return false;
   }
   if (type === "LOOKUP") {

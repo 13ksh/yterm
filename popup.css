@@ -54,6 +54,9 @@ h1 {
 .status p,
 .lookup label,
 .stats span,
+.usage span,
+.usage-avg,
+.usage-kicker,
 footer,
 .result {
   margin: 0;
@@ -62,7 +65,8 @@ footer,
 
 .status,
 .stats,
-.lookup {
+.lookup,
+.usage {
   margin-top: 12px;
   background: var(--card);
   border: 1px solid var(--line);
@@ -88,6 +92,34 @@ footer,
 .pill.filter {
   background: #3d1f28;
   color: #ff8aa0;
+}
+
+.usage-kicker {
+  font-size: 11px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  margin-bottom: 6px;
+}
+
+.usage-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.usage-grid div {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.usage-grid strong {
+  font-size: 22px;
+}
+
+.usage-avg {
+  margin-top: 8px;
+  font-size: 12px;
 }
 
 .stats {

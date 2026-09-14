@@ -14,6 +14,8 @@
   let enabled = true;
   let seq = 0;
   const waiters = new Map();
+  const pendingUsage = { watched: new Set(), blocked: new Set() };
+  let usageTimer = 0;
   const ATTR = "data-kpixel-hide";
   const ROOT_SEL = [
     "yt-lockup-view-model",
@@ -78,6 +80,51 @@
         "*"
       );
     });
+  }
+
+  function flushUsage() {
+    usageTimer = 0;
+    const watched = [...pendingUsage.watched];
+    const blocked = [...pendingUsage.blocked];
+    pendingUsage.watched.clear();
+    pendingUsage.blocked.clear();
+    if (!watched.length && !blocked.length) return;
+    window.postMessage(
+      { source: "kpixel-page", type: "usage", watched, blocked },
+      "*"
+    );
+  }
+
+  function noteWatched(vid) {
+    if (!enabled || !vid) return;
+    pendingUsage.watched.add(vid);
+    if (!usageTimer) usageTimer = setTimeout(flushUsage, 250);
+  }
+
+  function noteBlocked(vid) {
+    if (!enabled || !vid) return;
+    pendingUsage.blocked.add(vid);
+    if (!usageTimer) usageTimer = setTimeout(flushUsage, 250);
+  }
+
+  function trackDroppedVideos(dropped) {
+    Object.keys(dropped || {}).forEach((id) => {
+      if (pageKind() === "shorts") queueHiddenT(id);
+      else noteBlocked(id);
+    });
+  }
+
+  function videoIdFromNode(el) {
+    if (!el || !el.querySelector) return null;
+    const a = el.querySelector('a[href*="/watch"], a[href*="/shorts/"]');
+    if (!a) return null;
+    return KPixel.extractVideoId(a.getAttribute("href") || a.href || "");
+  }
+
+  function noteCurrentWatch() {
+    if (!enabled || pageKind() !== "watch") return;
+    const vid = KPixel.extractVideoId(location.pathname + location.search);
+    if (vid) noteWatched(vid);
   }
 
   function stringifyBody(body) {
@@ -183,6 +230,7 @@
     hiddenT[vid] = { seconds: tWatchSeconds(vid), pinged: false };
     pendingNextTrim = KPixel.NEIGHBOR_TRIM_MAX;
     neighborTrimVid = null;
+    noteBlocked(vid);
     setTimeout(() => fireHiddenTWatch(vid), 400);
   }
 
@@ -385,6 +433,7 @@
       if (lastWatchtimeTemplate) {
         Object.keys(hiddenT).forEach((id) => fireHiddenTWatch(id));
       }
+      noteWatched(vid);
       return;
     }
     queueHiddenT(vid);
@@ -415,9 +464,7 @@
     if (filterPayload && kind !== "search") {
       const dropped = {};
       KPixel.filterYoutubePayload(data, flags, kind, dropped);
-      if (kind === "shorts") {
-        Object.keys(dropped).forEach((id) => queueHiddenT(id));
-      }
+      trackDroppedVideos(dropped);
       return JSON.stringify(data);
     }
     return text;
@@ -434,9 +481,7 @@
       if (filterPayload !== false) {
         const dropped = {};
         KPixel.filterYoutubePayload(data, flags, pageKind(), dropped);
-        if (pageKind() === "shorts") {
-          Object.keys(dropped).forEach((id) => queueHiddenT(id));
-        }
+        trackDroppedVideos(dropped);
       }
     } catch {
       /* keep original */
@@ -471,7 +516,10 @@
       const surface = href.includes("/shorts/") ? "shorts" : "video";
       if (!KPixel.shouldFilterSurface(kind, surface)) return;
       const root = hideRoot(a);
-      if (root) root.setAttribute(ATTR, "1");
+      if (root) {
+        root.setAttribute(ATTR, "1");
+        if (surface === "video" || surface === "shorts") noteBlocked(vid);
+      }
     });
 
     document.querySelectorAll(ROOT_SEL).forEach((el) => {
@@ -491,12 +539,18 @@
         const surface = KPixel.surfaceForElement(el);
         if (!KPixel.shouldFilterSurface(kind, surface)) return;
         el.setAttribute(ATTR, "1");
+        if (surface === "video" || surface === "shorts") {
+          noteBlocked(videoIdFromNode(el));
+        }
         return;
       }
       if (flags[ch] !== "t") return;
       const surface = KPixel.surfaceForElement(el);
       if (!KPixel.shouldFilterSurface(kind, surface)) return;
       el.setAttribute(ATTR, "1");
+      if (surface === "video" || surface === "shorts") {
+        noteBlocked(videoIdFromNode(el));
+      }
     });
   }
 
@@ -505,9 +559,11 @@
     lookup(Object.values(videoMap)).then(() => {
       applyDomHides();
       tickShortsOneSecond();
+      noteCurrentWatch();
     });
     applyDomHides();
     tickShortsOneSecond();
+    noteCurrentWatch();
   }
 
   const origFetch = window.fetch;
@@ -672,9 +728,7 @@
             if (!filterIt) return;
             const dropped = {};
             KPixel.filterYoutubePayload(data, flags, pageKind(), dropped);
-            if (pageKind() === "shorts") {
-              Object.keys(dropped).forEach((id) => queueHiddenT(id));
-            }
+            trackDroppedVideos(dropped);
             const next = JSON.stringify(data);
             Object.defineProperty(this, "responseText", {
               configurable: true,

@@ -770,6 +770,77 @@ var KPixel = (function () {
     return out;
   }
 
+  const USAGE_KEEP_DAYS = 60;
+
+  function localDayKey(now) {
+    const d = now instanceof Date ? now : new Date(now || Date.now());
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, "0");
+    const day = String(d.getDate()).padStart(2, "0");
+    return y + "-" + m + "-" + day;
+  }
+
+  function emptyDayUsage() {
+    return { watched: {}, blocked: {} };
+  }
+
+  function pruneUsageDays(days, keepDays) {
+    const keep = keepDays == null ? USAGE_KEEP_DAYS : keepDays;
+    const keys = Object.keys(days || {}).sort();
+    while (keys.length > keep) {
+      delete days[keys.shift()];
+    }
+    return days;
+  }
+
+  function addUsageIds(days, dayKey, bucket, ids, keepDays) {
+    const store = days && typeof days === "object" ? days : {};
+    if (!dayKey || (bucket !== "watched" && bucket !== "blocked")) return store;
+    if (!store[dayKey]) store[dayKey] = emptyDayUsage();
+    if (!store[dayKey][bucket]) store[dayKey][bucket] = {};
+    for (const id of ids || []) {
+      if (id) store[dayKey][bucket][String(id)] = 1;
+    }
+    pruneUsageDays(store, keepDays);
+    return store;
+  }
+
+  function countUsageBucket(row, bucket) {
+    if (!row || !row[bucket] || typeof row[bucket] !== "object") return 0;
+    return Object.keys(row[bucket]).length;
+  }
+
+  function summarizeUsage(days, todayKey) {
+    const store = days && typeof days === "object" ? days : {};
+    const keys = Object.keys(store).sort();
+    let watchedSum = 0;
+    let blockedSum = 0;
+    let activeDays = 0;
+    for (const key of keys) {
+      const watched = countUsageBucket(store[key], "watched");
+      const blocked = countUsageBucket(store[key], "blocked");
+      if (watched || blocked) {
+        watchedSum += watched;
+        blockedSum += blocked;
+        activeDays += 1;
+      }
+    }
+    const today = store[todayKey] || emptyDayUsage();
+    return {
+      todayWatched: countUsageBucket(today, "watched"),
+      todayBlocked: countUsageBucket(today, "blocked"),
+      avgWatched: activeDays ? watchedSum / activeDays : 0,
+      avgBlocked: activeDays ? blockedSum / activeDays : 0,
+      days: activeDays,
+    };
+  }
+
+  function formatUsageNumber(n) {
+    const x = Number(n) || 0;
+    if (Math.abs(x - Math.round(x)) < 0.05) return String(Math.round(x));
+    return x.toFixed(1);
+  }
+
   const api = {
     UC_RE,
     ITEM_SELECTORS,
@@ -813,6 +884,13 @@ var KPixel = (function () {
     T_SHORT_WATCH_MIN,
     T_SHORT_WATCH_MAX,
     NEIGHBOR_TRIM_MAX,
+    USAGE_KEEP_DAYS,
+    localDayKey,
+    emptyDayUsage,
+    addUsageIds,
+    countUsageBucket,
+    summarizeUsage,
+    formatUsageNumber,
   };
 
   return api;

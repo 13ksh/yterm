@@ -30,6 +30,7 @@ async function refresh() {
   $("flaggedCount").textContent = String(state.flagged || 0);
   $("lookupCount").textContent = String((state.stats && state.stats.lookups) || 0);
   $("cacheSize").textContent = "캐시 " + (state.cacheSize || 0);
+  renderUsage(state.usage);
 
   const tab = await activeYoutubeTab();
   if (!tab) {
@@ -110,6 +111,26 @@ async function runLookup() {
     $("lookupResult").className = "result unknown";
   }
   refresh();
+}
+
+function renderUsage(usage) {
+  const todayWatched = (usage && usage.todayWatched) || 0;
+  const todayBlocked = (usage && usage.todayBlocked) || 0;
+  $("todayWatched").textContent = KPixel.formatUsageNumber(todayWatched);
+  $("todayBlocked").textContent = KPixel.formatUsageNumber(todayBlocked);
+  if (!usage || !usage.days) {
+    $("usageAvg").textContent =
+      "유튜브를 보면 하루 평균 시청·차단이 여기에 쌓입니다.";
+    return;
+  }
+  $("usageAvg").textContent =
+    "하루 평균 본 영상 " +
+    KPixel.formatUsageNumber(usage.avgWatched) +
+    "개 · 차단 " +
+    KPixel.formatUsageNumber(usage.avgBlocked) +
+    "개 · " +
+    usage.days +
+    "일";
 }
 
 refresh();
