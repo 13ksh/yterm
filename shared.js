@@ -1,6 +1,5 @@
 /**
  * Shared helpers for the KPixel YouTube filter.
- * Works in the extension, Node tests, and the preview demo.
  */
 (function (root) {
   const UC_RE = /^UC[\w-]{22}$/;
@@ -15,7 +14,7 @@
   const OWNER_KEY_RE =
     /^(channelid|externalchannelid|authorchannelid|browseid)$/i;
   const OWNER_CONTEXT_RE =
-    /(owner|author|byline|channel|uploader|creator|postauthor)/i;
+    /(owner|author|byline|channel|uploader|creator|postauthor|lockupmetadata|avatar|canonical|channelnavigation|ownertext|authorendpoint|shortbyline|longbyline)/i;
 
   const ITEM_SELECTORS = [
     "ytd-rich-item-renderer",
@@ -27,6 +26,8 @@
     "ytd-reel-video-renderer",
     "ytd-shorts-lockup-view-model",
     "ytm-shorts-lockup-view-model",
+    "yt-lockup-view-model",
+    "ytd-rich-grid-media",
     "ytd-comment-thread-renderer",
     "ytd-comment-view-model",
     "ytd-comment-renderer",
@@ -179,95 +180,178 @@
     return null;
   }
 
-  function extractChannelIdFromData(data, depth) {
+  function extractChannelIdFromData(data) {
     if (data == null) return null;
     if (typeof data === "string") return pickUc(data);
-    if (typeof data !== "object" || depth > 12) return null;
-
-    const direct =
-      pickUc(data.channelId) ||
-      pickUc(data.externalChannelId) ||
-      pickUc(data.authorChannelId) ||
-      pickUc(data.channel_id);
-    if (direct) return direct;
-
-    const browse =
-      pickUc(data.browseId) ||
-      pickUc(data.browseEndpoint && data.browseEndpoint.browseId);
-    if (browse) return browse;
-
-    const paths = [
-      data.ownerText &&
-        data.ownerText.runs &&
-        data.ownerText.runs[0] &&
-        data.ownerText.runs[0].navigationEndpoint &&
-        data.ownerText.runs[0].navigationEndpoint.browseEndpoint &&
-        data.ownerText.runs[0].navigationEndpoint.browseEndpoint.browseId,
-      data.shortBylineText &&
-        data.shortBylineText.runs &&
-        data.shortBylineText.runs[0] &&
-        data.shortBylineText.runs[0].navigationEndpoint &&
-        data.shortBylineText.runs[0].navigationEndpoint.browseEndpoint &&
-        data.shortBylineText.runs[0].navigationEndpoint.browseEndpoint.browseId,
-      data.longBylineText &&
-        data.longBylineText.runs &&
-        data.longBylineText.runs[0] &&
-        data.longBylineText.runs[0].navigationEndpoint &&
-        data.longBylineText.runs[0].navigationEndpoint.browseEndpoint &&
-        data.longBylineText.runs[0].navigationEndpoint.browseEndpoint.browseId,
-      data.authorText &&
-        data.authorText.runs &&
-        data.authorText.runs[0] &&
-        data.authorText.runs[0].navigationEndpoint &&
-        data.authorText.runs[0].navigationEndpoint.browseEndpoint &&
-        data.authorText.runs[0].navigationEndpoint.browseEndpoint.browseId,
-      data.authorEndpoint &&
-        data.authorEndpoint.browseEndpoint &&
-        data.authorEndpoint.browseEndpoint.browseId,
-      data.navigationEndpoint &&
-        data.navigationEndpoint.browseEndpoint &&
-        data.navigationEndpoint.browseEndpoint.browseId,
-      data.owner &&
-        data.owner.videoOwnerRenderer &&
-        data.owner.videoOwnerRenderer.navigationEndpoint &&
-        data.owner.videoOwnerRenderer.navigationEndpoint.browseEndpoint &&
-        data.owner.videoOwnerRenderer.navigationEndpoint.browseEndpoint.browseId,
-    ];
-    for (const p of paths) {
-      const id = pickUc(p);
-      if (id) return id;
-    }
-
-    return walkForOwnerId(data, 0, false);
+    if (typeof data !== "object") return null;
+    const preferred = [];
+    const fallback = [];
+    gatherUc(data, 0, false, preferred, fallback, 14);
+    return preferred[0] || fallback[0] || null;
   }
 
-  function walkForOwnerId(node, depth, inOwnerContext) {
-    if (node == null || depth > 10) return null;
+  function gatherUc(node, depth, inOwner, preferred, fallback, maxDepth) {
+    if (node == null || depth > maxDepth) return;
     if (typeof node === "string") {
-      return inOwnerContext ? pickUc(node) : null;
+      const id = pickUc(node);
+      if (id) (inOwner ? preferred : fallback).push(id);
+      return;
     }
-    if (typeof node !== "object") return null;
+    if (typeof node !== "object") return;
     if (Array.isArray(node)) {
       for (const item of node) {
-        const found = walkForOwnerId(item, depth + 1, inOwnerContext);
-        if (found) return found;
+        gatherUc(item, depth + 1, inOwner, preferred, fallback, maxDepth);
       }
-      return null;
+      return;
     }
-
+    const direct =
+      pickUc(node.channelId) ||
+      pickUc(node.externalChannelId) ||
+      pickUc(node.authorChannelId);
+    if (direct) {
+      preferred.push(direct);
+      return;
+    }
     for (const [key, value] of Object.entries(node)) {
       const ownerKey = OWNER_KEY_RE.test(key);
-      const ctx = inOwnerContext || OWNER_CONTEXT_RE.test(key);
-      if (ownerKey && typeof value === "string") {
+      const ctx =
+        inOwner ||
+        ownerKey ||
+        OWNER_CONTEXT_RE.test(key);
+      if (typeof value === "string" && (ownerKey || ctx)) {
         const id = pickUc(value);
-        if (id) return id;
+        if (id) {
+          preferred.push(id);
+          continue;
+        }
       }
-      if (ctx || ownerKey) {
-        const found = walkForOwnerId(value, depth + 1, true);
-        if (found) return found;
-      }
+      gatherUc(value, depth + 1, ctx, preferred, fallback, maxDepth);
+      if (preferred.length) return;
+    }
+  }
+
+  function payloadSurface(item) {
+    if (!item || typeof item !== "object" || Array.isArray(item)) return null;
+    if (
+      item.commentThreadRenderer ||
+      item.commentRenderer ||
+      item.commentViewModel ||
+      item.commentEntityPayload
+    ) {
+      return "comment";
+    }
+    if (
+      item.backstagePostThreadRenderer ||
+      item.backstagePostRenderer ||
+      item.postRenderer
+    ) {
+      return "post";
+    }
+    const inner =
+      (item.richItemRenderer && item.richItemRenderer.content) || item;
+    if (
+      inner.reelItemRenderer ||
+      inner.shortsLockupViewModel ||
+      item.reelItemRenderer ||
+      item.shortsLockupViewModel
+    ) {
+      return "shorts";
+    }
+    if (
+      item.videoRenderer ||
+      item.compactVideoRenderer ||
+      item.gridVideoRenderer ||
+      item.lockupViewModel ||
+      item.richItemRenderer ||
+      item.endScreenVideoRenderer ||
+      item.movieRenderer ||
+      item.compactMovieRenderer ||
+      item.gridVideoRenderer ||
+      item.playlistVideoRenderer
+    ) {
+      return "video";
     }
     return null;
+  }
+
+  function shouldDropPayloadItem(item, flags, pageKind) {
+    const surface = payloadSurface(item);
+    if (!surface || !shouldFilterSurface(pageKind, surface)) return false;
+    const id = extractChannelIdFromData(item);
+    return !!(id && flags && flags[id] === "t");
+  }
+
+  function isEmptyShelf(item) {
+    if (!item || typeof item !== "object") return false;
+    const shelf =
+      item.richShelfRenderer ||
+      item.reelShelfRenderer ||
+      item.shelfRenderer ||
+      (item.richSectionRenderer &&
+        item.richSectionRenderer.content &&
+        item.richSectionRenderer.content.richShelfRenderer);
+    if (!shelf) return false;
+    const contents = shelf.contents || shelf.items || [];
+    return contents.length === 0;
+  }
+
+  function filterYoutubePayload(data, flags, pageKind) {
+    if (!data || typeof data !== "object" || !flags) return data;
+    if (pageKind === "search") return data;
+    walkFilter(data, flags, pageKind);
+    return data;
+  }
+
+  function walkFilter(node, flags, pageKind) {
+    if (!node || typeof node !== "object") return;
+    if (Array.isArray(node)) {
+      for (let i = node.length - 1; i >= 0; i--) {
+        const el = node[i];
+        if (shouldDropPayloadItem(el, flags, pageKind)) {
+          node.splice(i, 1);
+          continue;
+        }
+        walkFilter(el, flags, pageKind);
+        if (isEmptyShelf(el)) node.splice(i, 1);
+      }
+      return;
+    }
+    for (const value of Object.values(node)) {
+      walkFilter(value, flags, pageKind);
+    }
+  }
+
+  function collectChannelIdsFromPayload(data) {
+    const out = new Set();
+    collectFromRenderers(data, out, 0);
+    return [...out];
+  }
+
+  function collectFromRenderers(node, out, depth) {
+    if (!node || depth > 22) return;
+    if (Array.isArray(node)) {
+      for (const el of node) {
+        if (payloadSurface(el)) {
+          const id = extractChannelIdFromData(el);
+          if (id) out.add(id);
+        }
+        collectFromRenderers(el, out, depth + 1);
+      }
+      return;
+    }
+    if (typeof node === "object") {
+      for (const value of Object.values(node)) {
+        collectFromRenderers(value, out, depth + 1);
+      }
+    }
+  }
+
+  function shouldInterceptYoutubeiUrl(url) {
+    const u = String(url || "");
+    if (u.includes("/youtubei/v1/search")) return false;
+    if (u.includes("/youtubei/v1/player")) return false;
+    if (u.includes("/youtubei/v1/log")) return false;
+    return u.includes("/youtubei/v1/");
   }
 
   function collectTextUcIds(text) {
@@ -301,6 +385,11 @@
     extractVideoId,
     extractChannelIdFromData,
     collectTextUcIds,
+    payloadSurface,
+    filterYoutubePayload,
+    collectChannelIdsFromPayload,
+    shouldInterceptYoutubeiUrl,
+    shouldDropPayloadItem,
   };
 
   root.KPixel = api;

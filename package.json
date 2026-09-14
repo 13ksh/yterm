@@ -4,7 +4,6 @@
   "private": true,
   "description": "Hide YouTube channels flagged t by del.kpixel.net from feeds, comments, posts, and Shorts. Search stays visible.",
   "scripts": {
-    "preview": "node preview-server.mjs",
     "test": "node --test test/*.js",
     "icons": "python3 scripts/make-icons.py"
   }

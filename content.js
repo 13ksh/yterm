@@ -5,6 +5,43 @@
   const CHANNEL_LINK_SEL =
     'a[href*="/channel/"], a[href*="/@"], a[href*="/user/"], a[href*="/c/"]';
 
+  function postToPage(payload) {
+    window.postMessage(Object.assign({ source: "kpixel-cs" }, payload), "*");
+  }
+
+  chrome.runtime.sendMessage({ type: "GET_FLAGS" }, (res) => {
+    if (chrome.runtime.lastError) return;
+    if (res) {
+      postToPage({
+        type: "seed",
+        flags: res.flags || {},
+        enabled: res.enabled,
+      });
+    }
+  });
+
+  window.addEventListener("message", async (event) => {
+    if (event.source !== window) return;
+    const msg = event.data;
+    if (!msg || msg.source !== "kpixel-page") return;
+    if (msg.type === "lookup") {
+      const res = await chrome.runtime.sendMessage({
+        type: "LOOKUP",
+        channelIds: msg.channelIds,
+      });
+      postToPage({
+        type: "flags",
+        req: msg.req,
+        results: (res && res.results) || {},
+      });
+      if (res && res.results) {
+        for (const [id, flag] of Object.entries(res.results)) flags.set(id, flag);
+        scheduleScan(document);
+      }
+    }
+  });
+
+
   const handleCache = new Map();
   const pendingIds = new Set();
   const flags = new Map();
@@ -128,21 +165,21 @@
   }
 
   function hideRoot(el) {
-    if (
-      el.matches &&
-      el.matches("ytd-comment-view-model, ytd-comment-renderer, ytm-comment-renderer")
-    ) {
-      const thread = el.closest(
-        "ytd-comment-thread-renderer, ytm-comment-thread-renderer"
+    if (!el || !el.closest) return el;
+    const tag = (el.tagName || "").toLowerCase();
+    if (tag.includes("comment")) {
+      return (
+        el.closest("ytd-comment-thread-renderer, ytm-comment-thread-renderer") ||
+        el
       );
-      if (thread) {
-        const first = thread.querySelector(
-          "ytd-comment-view-model, ytd-comment-renderer, ytm-comment-renderer"
-        );
-        if (first === el) return thread;
-      }
     }
-    return el;
+    return (
+      el.closest("ytd-rich-item-renderer, ytm-rich-item-renderer") ||
+      el.closest("ytd-compact-video-renderer") ||
+      el.closest("ytd-video-renderer") ||
+      el.closest("ytd-reel-video-renderer, ytd-reel-item-renderer") ||
+      el
+    );
   }
 
   function setHidden(el, hide) {
@@ -290,6 +327,7 @@
     if (area !== "local") return;
     if (changes.enabled) {
       enabled = changes.enabled.newValue !== false;
+      postToPage({ type: "enabled", enabled });
       if (!enabled) {
         document.querySelectorAll("[" + ATTR + '="1"]').forEach((el) => {
           setHidden(el, false);
@@ -297,6 +335,18 @@
       } else {
         scheduleScan(document);
       }
+    }
+    if (changes.forceT) {
+      chrome.runtime.sendMessage({ type: "GET_FLAGS" }, (res) => {
+        if (res) {
+          postToPage({
+            type: "seed",
+            flags: res.flags || {},
+            enabled: res.enabled,
+          });
+        }
+        scheduleScan(document);
+      });
     }
   });
 
@@ -309,6 +359,7 @@
       sendResponse({
         hidden: document.querySelectorAll("[" + ATTR + '="1"]').length,
         kind: pageKind(),
+        found: flags.size,
       });
     }
   });

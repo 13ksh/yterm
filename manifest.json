@@ -23,7 +23,8 @@
   "host_permissions": [
     "https://del.kpixel.net/*",
     "https://www.youtube.com/*",
-    "https://m.youtube.com/*"
+    "https://m.youtube.com/*",
+    "https://youtube.com/*"
   ],
   "background": {
     "service_worker": "background.js"
@@ -32,11 +33,22 @@
     {
       "matches": [
         "https://www.youtube.com/*",
-        "https://m.youtube.com/*"
+        "https://m.youtube.com/*",
+        "https://youtube.com/*"
+      ],
+      "js": ["shared.js", "inject.js"],
+      "run_at": "document_start",
+      "world": "MAIN"
+    },
+    {
+      "matches": [
+        "https://www.youtube.com/*",
+        "https://m.youtube.com/*",
+        "https://youtube.com/*"
       ],
       "js": ["shared.js", "content.js"],
       "css": ["hide.css"],
-      "run_at": "document_idle"
+      "run_at": "document_start"
     }
   ]
 }

@@ -8,6 +8,7 @@ const MAX_CONCURRENCY = 4;
 const memory = {
   cache: {},
   enabled: true,
+  forceT: [],
   stats: { lookups: 0, hidden: 0, flagged: 0 },
 };
 
@@ -24,10 +25,12 @@ async function loadState() {
   const stored = await chrome.storage.local.get({
     cache: {},
     enabled: true,
+    forceT: [],
     stats: { lookups: 0, hidden: 0, flagged: 0 },
   });
   memory.cache = stored.cache || {};
   memory.enabled = stored.enabled !== false;
+  memory.forceT = Array.isArray(stored.forceT) ? stored.forceT : [];
   memory.stats = stored.stats || { lookups: 0, hidden: 0, flagged: 0 };
 }
 
@@ -89,6 +92,7 @@ async function fetchFlag(channelId) {
 
 async function lookupOne(channelId) {
   if (!KPixel.isUcId(channelId)) return "unknown";
+  if (memory.forceT.includes(channelId)) return "t";
   const cached = readFresh(channelId);
   if (cached) return cached;
   if (inflight.has(channelId)) return inflight.get(channelId);
@@ -115,6 +119,21 @@ async function lookupMany(channelIds) {
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   const type = message && message.type;
+  if (type === "GET_FLAGS") {
+    const flags = {};
+    for (const [id, row] of Object.entries(memory.cache)) {
+      if (row && row.flag) flags[id] = row.flag;
+    }
+    for (const id of memory.forceT) flags[id] = "t";
+    sendResponse({ flags, enabled: memory.enabled });
+    return false;
+  }
+  if (type === "SET_FORCE_T") {
+    memory.forceT = [...new Set((message.ids || []).filter(KPixel.isUcId))];
+    chrome.storage.local.set({ forceT: memory.forceT });
+    sendResponse({ forceT: memory.forceT });
+    return false;
+  }
   if (type === "GET_STATE") {
     sendResponse({
       enabled: memory.enabled,
@@ -133,9 +152,10 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   }
   if (type === "CLEAR_CACHE") {
     memory.cache = {};
+    memory.forceT = [];
     memory.stats = { lookups: 0, hidden: 0, flagged: 0 };
     schedulePersist();
-    chrome.storage.local.set({ cache: {}, stats: memory.stats });
+    chrome.storage.local.set({ cache: {}, forceT: [], stats: memory.stats });
     sendResponse({ ok: true });
     return false;
   }
@@ -161,3 +181,9 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
 });
 
 loadState();
+
+self.kpixelSetForceT = async (ids) => {
+  memory.forceT = [...new Set((ids || []).filter(KPixel.isUcId))];
+  await chrome.storage.local.set({ forceT: memory.forceT });
+  return memory.forceT;
+};
