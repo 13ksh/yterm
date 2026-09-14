@@ -100,8 +100,8 @@ var KPixel = (function () {
   /**
    * Search results stay visible. Channel pages stay visible except comments
    * from flagged authors. Everywhere else, hide flagged videos / shorts / posts / comments.
-   * Immersive /shorts/ also hides t clips from the person; inject.js still reports
-   * a sine-weighted 0.8–1.6s watch and trims up to 0.2s from the next clip.
+   * Immersive /shorts/ drops t clips from the reel list (1-2-3 → 1-3) instead of
+   * advancing past them, so the previous clip is still there when you swipe up.
    */
   function shouldFilterSurface(pageKind, surface) {
     if (pageKind === "search") return false;
@@ -170,6 +170,108 @@ var KPixel = (function () {
     if (shorts) return shorts[1];
     const watch = String(hrefOrPath).match(WATCH_ID_RE);
     if (watch) return watch[1];
+    return null;
+  }
+
+  function reelEndpointVideoId(node, depth) {
+    if (!node || typeof node !== "object" || (depth || 0) > 6) return null;
+    if (node.reelWatchEndpoint && node.reelWatchEndpoint.videoId) {
+      return node.reelWatchEndpoint.videoId;
+    }
+    if (node.watchEndpoint && node.watchEndpoint.videoId) {
+      return node.watchEndpoint.videoId;
+    }
+    if (node.urlEndpoint && node.urlEndpoint.url) {
+      return extractVideoId(node.urlEndpoint.url);
+    }
+    const next = depth ? depth + 1 : 1;
+    return (
+      reelEndpointVideoId(node.navigationEndpoint, next) ||
+      reelEndpointVideoId(node.endpoint, next) ||
+      reelEndpointVideoId(node.command, next) ||
+      reelEndpointVideoId(node.innertubeCommand, next) ||
+      reelEndpointVideoId(node.onTap, next)
+    );
+  }
+
+  function extractPayloadVideoId(item) {
+    if (!item || typeof item !== "object" || Array.isArray(item)) return null;
+    const inner =
+      (item.richItemRenderer && item.richItemRenderer.content) || item;
+    const reel = inner.reelItemRenderer || item.reelItemRenderer;
+    if (reel && reel.videoId) return reel.videoId;
+    const video =
+      inner.videoRenderer ||
+      inner.compactVideoRenderer ||
+      inner.gridVideoRenderer ||
+      item.videoRenderer;
+    if (video && video.videoId) return video.videoId;
+    const fromEp = reelEndpointVideoId(inner) || reelEndpointVideoId(item);
+    if (fromEp) return fromEp;
+    if (typeof inner.videoId === "string" && inner.videoId) return inner.videoId;
+    if (typeof item.videoId === "string" && item.videoId) return item.videoId;
+    if (inner.shortsLockupViewModel) {
+      return extractVideoId(
+        JSON.stringify(inner.shortsLockupViewModel).slice(0, 8000)
+      );
+    }
+    return null;
+  }
+
+  function shouldSpliceSequenceItem(item, videoId) {
+    if (!item || !videoId) return false;
+    const id = extractPayloadVideoId(item);
+    if (id) return id === videoId;
+    const videos = indexYoutubeMedia(item, null, 0).videos;
+    const keys = Object.keys(videos);
+    return keys.length === 1 && keys[0] === videoId;
+  }
+
+  function spliceVideoFromNode(node, videoId, depth, seen) {
+    if (!node || typeof node !== "object" || !videoId) return 0;
+    if (depth > 14) return 0;
+    const mark = seen || new Set();
+    if (mark.has(node)) return 0;
+    mark.add(node);
+    let n = 0;
+    if (Array.isArray(node)) {
+      for (let i = node.length - 1; i >= 0; i--) {
+        if (shouldSpliceSequenceItem(node[i], videoId)) {
+          node.splice(i, 1);
+          n += 1;
+          continue;
+        }
+        n += spliceVideoFromNode(node[i], videoId, depth + 1, mark);
+      }
+      return n;
+    }
+    for (const value of Object.values(node)) {
+      n += spliceVideoFromNode(value, videoId, depth + 1, mark);
+    }
+    return n;
+  }
+
+  /**
+   * After dropping `currentId`, pick the clip that should occupy that slot:
+   * the next kept id below, else the previous kept id above.
+   * Swiping up from that clip then reaches the original previous item.
+   */
+  function nextKeptShortId(orderedIds, currentId, isDropped) {
+    const ids = orderedIds || [];
+    const dropped = typeof isDropped === "function" ? isDropped : () => false;
+    let i = ids.indexOf(currentId);
+    if (i < 0) {
+      for (let k = 0; k < ids.length; k++) {
+        if (!dropped(ids[k])) return ids[k];
+      }
+      return null;
+    }
+    for (let k = i + 1; k < ids.length; k++) {
+      if (!dropped(ids[k])) return ids[k];
+    }
+    for (let k = i - 1; k >= 0; k--) {
+      if (!dropped(ids[k])) return ids[k];
+    }
     return null;
   }
 
@@ -359,6 +461,8 @@ var KPixel = (function () {
     if (u.includes("/youtubei/v1/search")) return false;
     if (u.includes("/youtubei/v1/player")) return false;
     if (u.includes("/youtubei/v1/log")) return false;
+    // Current short payload. Stripping it holes the player; the sequence list is filtered instead.
+    if (u.includes("/youtubei/v1/reel/reel_item_watch")) return false;
     return u.includes("/youtubei/v1/");
   }
 
@@ -907,6 +1011,7 @@ var KPixel = (function () {
     normalizeHandle,
     parseChannelHref,
     extractVideoId,
+    extractPayloadVideoId,
     extractChannelIdFromData,
     collectTextUcIds,
     payloadSurface,
@@ -915,6 +1020,9 @@ var KPixel = (function () {
     shouldInterceptYoutubeiUrl,
     shouldIngestYoutubeiUrl,
     shouldDropPayloadItem,
+    shouldSpliceSequenceItem,
+    spliceVideoFromNode,
+    nextKeptShortId,
     indexYoutubeMedia,
     shouldRewriteShortsWatchtime,
     isWatchtimeUrl,

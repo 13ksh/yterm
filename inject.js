@@ -7,7 +7,7 @@
   const commentMap = Object.create(null);
   const tWatchByVideo = Object.create(null);
   const hiddenT = Object.create(null);
-  const seekedNeighbor = Object.create(null);
+  const replacedFor = Object.create(null);
   let lastWatchtimeTemplate = null;
   let pendingNextTrim = 0;
   let neighborTrimVid = null;
@@ -316,49 +316,113 @@
     return { url: url, body: body };
   }
 
-  let skipTimer = 0;
-  let skipVid = null;
+  let hideVid = null;
   let shortFlagLookup = false;
+  let playRescue = false;
+  let coverTimer = 0;
 
-  function goNextShort() {
-    const btn =
-      document.querySelector("#navigation-button-down button") ||
-      document.querySelector("ytd-shorts #navigation-button-down button") ||
-      document.querySelector('button[aria-label="Next video"]') ||
-      document.querySelector('button[aria-label="다음 동영상"]') ||
-      document.querySelector('button[aria-label="다음"]');
-    if (btn) {
-      btn.click();
+  function hideCover(on) {
+    let cover = document.getElementById("kpixel-hide-cover");
+    if (on) {
+      if (!cover) {
+        cover = document.createElement("div");
+        cover.id = "kpixel-hide-cover";
+        cover.setAttribute("aria-hidden", "true");
+        document.documentElement.appendChild(cover);
+      }
+      cover.hidden = false;
+      clearTimeout(coverTimer);
+      coverTimer = setTimeout(() => hideCover(false), 2800);
       return;
     }
-    window.dispatchEvent(
-      new KeyboardEvent("keydown", {
-        key: "ArrowDown",
-        code: "ArrowDown",
-        keyCode: 40,
-        which: 40,
-        bubbles: true,
-      })
+    clearTimeout(coverTimer);
+    coverTimer = 0;
+    if (!cover) return;
+    cover.hidden = true;
+  }
+
+  function isActiveShortRenderer(el) {
+    if (!el || !el.matches) return false;
+    return el.matches(
+      "ytd-reel-video-renderer[is-active], ytd-reel-video-renderer[active], ytm-reel-item-renderer[is-active]"
     );
   }
 
-  function cloakCurrentShort() {
-    const active = document.querySelector(
-      "ytd-reel-video-renderer[is-active], ytd-reel-video-renderer[active], ytm-reel-item-renderer[is-active]"
-    );
-    if (active) active.setAttribute(ATTR, "1");
+  function canHideShortsRoot(root) {
+    if (!root) return false;
+    if (isActiveShortRenderer(root)) return false;
+    if (root.id === "shorts-player" || root.id === "movie_player") return false;
+    if (root.closest && root.closest("#shorts-player, #movie_player")) {
+      return false;
+    }
+    return true;
+  }
+
+  function videoIdFromReel(el) {
+    if (!el) return null;
+    try {
+      const data =
+        el.data || (el.__data && (el.__data.data || el.__data)) || null;
+      const id = KPixel.extractPayloadVideoId(data);
+      if (id) return id;
+    } catch {
+      /* ignore */
+    }
+    return videoIdFromNode(el);
+  }
+
+  function orderedShortIds() {
+    const ids = [];
     document
-      .querySelectorAll(
-        "ytd-reel-video-renderer[is-active] video, ytd-reel-video-renderer[active] video, #shorts-player video, #movie_player video"
-      )
-      .forEach((video) => {
-        try {
-          video.muted = true;
-          video.pause();
-          video.style.opacity = "0";
-        } catch {
-          /* ignore */
+      .querySelectorAll("ytd-reel-video-renderer, ytm-reel-item-renderer")
+      .forEach((el) => {
+        const id = videoIdFromReel(el);
+        if (id && ids[ids.length - 1] !== id) ids.push(id);
+      });
+    return ids;
+  }
+
+  function isDroppedShort(vid) {
+    if (!vid) return false;
+    if (hiddenT[vid]) return true;
+    const ch = videoMap[vid];
+    return !!(ch && flags[ch] === "t");
+  }
+
+  function dropShortFromLivePlayer(videoId) {
+    if (!videoId) return;
+    const seen = new Set();
+    const roots = [];
+    if (window.ytInitialData) roots.push(window.ytInitialData);
+    document.querySelectorAll("ytd-shorts, ytd-reel-shelf-renderer").forEach((host) => {
+      try {
+        if (host.data) roots.push(host.data);
+      } catch {
+        /* ignore */
+      }
+    });
+    roots.forEach((root) => {
+      try {
+        KPixel.spliceVideoFromNode(root, videoId, 0, seen);
+      } catch {
+        /* ignore */
+      }
+    });
+  }
+
+  function hideInactiveTReels() {
+    document
+      .querySelectorAll("ytd-reel-video-renderer, ytm-reel-item-renderer")
+      .forEach((el) => {
+        const id = videoIdFromReel(el);
+        if (!id) return;
+        if (!isDroppedShort(id)) {
+          if (el.getAttribute(ATTR) === "1") el.removeAttribute(ATTR);
+          return;
         }
+        queueHiddenT(id);
+        if (!canHideShortsRoot(el)) return;
+        el.setAttribute(ATTR, "1");
       });
   }
 
@@ -370,37 +434,94 @@
     );
   }
 
-  function seekActiveShort(seconds) {
-    if (!(seconds > 0)) return;
+  function ensurePlaying() {
     const video = findActiveShortVideo();
-    if (!video) return false;
+    if (video) {
+      if (video.style.opacity === "0") video.style.removeProperty("opacity");
+      video.style.removeProperty("visibility");
+      if (video.paused) {
+        const play = video.play();
+        if (play && typeof play.catch === "function") play.catch(() => {});
+      }
+    }
     try {
-      if (video.currentTime > 0.35) return true;
-      const dur = Number(video.duration);
-      const cap =
-        Number.isFinite(dur) && dur > 0 ? Math.max(0, dur - 0.05) : seconds;
-      video.currentTime = Math.min(seconds, cap);
-      return true;
+      const player =
+        document.querySelector("#shorts-player") ||
+        document.querySelector("#movie_player") ||
+        document.querySelector(".html5-video-player");
+      if (player && typeof player.playVideo === "function") player.playVideo();
     } catch {
-      return false;
+      /* ignore */
     }
   }
 
-  function trySeekNeighbor(vid, seconds, attempts) {
-    if (KPixel.extractVideoId(location.pathname) !== vid) return;
-    if (seekActiveShort(seconds)) return;
-    if (attempts > 0) {
-      setTimeout(() => trySeekNeighbor(vid, seconds, attempts - 1), 50);
+  function replaceCurrentShort(videoId) {
+    if (!videoId) return;
+    const url = "/shorts/" + videoId;
+    try {
+      history.replaceState(history.state || {}, "", url);
+    } catch {
+      /* ignore */
+    }
+    const endpoint = {
+      commandMetadata: {
+        webCommandMetadata: {
+          url: url,
+          webPageType: "WEB_PAGE_TYPE_SHORTS",
+        },
+      },
+      reelWatchEndpoint: { videoId: videoId },
+    };
+    const app = document.querySelector("ytd-app");
+    try {
+      if (app && typeof app.handleCommand === "function") {
+        app.handleCommand({ command: endpoint }, { replace: true });
+      }
+    } catch {
+      /* fall through */
+    }
+    try {
+      (app || document).dispatchEvent(
+        new CustomEvent("yt-navigate", {
+          bubbles: true,
+          cancelable: true,
+          composed: true,
+          detail: { endpoint: endpoint, replace: true },
+        })
+      );
+    } catch {
+      /* ignore */
+    }
+    try {
+      const player =
+        document.querySelector("#shorts-player") ||
+        document.querySelector("#movie_player") ||
+        document.querySelector(".html5-video-player");
+      if (player && typeof player.loadVideoById === "function") {
+        player.loadVideoById(videoId);
+      }
+    } catch {
+      /* ignore */
     }
   }
 
   function tickShortsOneSecond() {
+    try {
+      tickShortsInner();
+    } catch {
+      /* keep the player alive */
+    }
+  }
+
+  function tickShortsInner() {
     if (!enabled || pageKind() !== "shorts") {
-      skipVid = null;
-      clearTimeout(skipTimer);
+      hideVid = null;
+      playRescue = false;
+      hideCover(false);
       return;
     }
     refreshMediaMaps();
+    hideInactiveTReels();
     const vid = KPixel.extractVideoId(location.pathname);
     if (!vid) return;
     const ch = videoMap[vid];
@@ -416,34 +537,39 @@
       return;
     }
     if (flags[ch] !== "t") {
+      hideCover(false);
+      if (hideVid && hideVid !== vid) {
+        hideVid = null;
+      }
       if (pendingNextTrim > 0) {
         if (!neighborTrimVid) neighborTrimVid = vid;
-        if (neighborTrimVid === vid && !seekedNeighbor[vid]) {
-          seekedNeighbor[vid] = true;
-          trySeekNeighbor(vid, pendingNextTrim, 16);
-        } else if (neighborTrimVid !== vid) {
+        else if (neighborTrimVid !== vid) {
           pendingNextTrim = 0;
           neighborTrimVid = null;
         }
-      }
-      if (skipVid !== vid) {
-        clearTimeout(skipTimer);
-        skipVid = null;
       }
       if (lastWatchtimeTemplate) {
         Object.keys(hiddenT).forEach((id) => fireHiddenTWatch(id));
       }
       noteWatched(vid);
+      if (playRescue) {
+        playRescue = false;
+        ensurePlaying();
+      }
       return;
     }
     queueHiddenT(vid);
-    cloakCurrentShort();
-    if (skipVid === vid) return;
-    skipVid = vid;
-    clearTimeout(skipTimer);
-    skipTimer = setTimeout(() => {
-      if (KPixel.extractVideoId(location.pathname) === vid) goNextShort();
-    }, 0);
+    hideCover(true);
+    const nextId = KPixel.nextKeptShortId(orderedShortIds(), vid, isDroppedShort);
+    hideInactiveTReels();
+    if (!nextId) return;
+    if (replacedFor[vid] === nextId) return;
+    replacedFor[vid] = nextId;
+    hideVid = vid;
+    playRescue = true;
+    dropShortFromLivePlayer(vid);
+    hideInactiveTReels();
+    replaceCurrentShort(nextId);
   }
 
   async function filterText(text, filterPayload) {
@@ -517,6 +643,7 @@
       if (!KPixel.shouldFilterSurface(kind, surface)) return;
       const root = hideRoot(a);
       if (root) {
+        if (kind === "shorts" && !canHideShortsRoot(root)) return;
         root.setAttribute(ATTR, "1");
         if (surface === "video" || surface === "shorts") noteBlocked(vid);
       }
@@ -538,6 +665,7 @@
         if (!parsed.channelId || flags[parsed.channelId] !== "t") return;
         const surface = KPixel.surfaceForElement(el);
         if (!KPixel.shouldFilterSurface(kind, surface)) return;
+        if (kind === "shorts" && !canHideShortsRoot(el)) return;
         el.setAttribute(ATTR, "1");
         if (surface === "video" || surface === "shorts") {
           noteBlocked(videoIdFromNode(el));
@@ -547,6 +675,7 @@
       if (flags[ch] !== "t") return;
       const surface = KPixel.surfaceForElement(el);
       if (!KPixel.shouldFilterSurface(kind, surface)) return;
+      if (kind === "shorts" && !canHideShortsRoot(el)) return;
       el.setAttribute(ATTR, "1");
       if (surface === "video" || surface === "shorts") {
         noteBlocked(videoIdFromNode(el));

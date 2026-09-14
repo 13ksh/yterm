@@ -34,6 +34,7 @@ test("feeds hide videos shorts posts and comments", () => {
   assert.equal(KPixel.getPageKind("/shorts/abc"), "shorts");
   assert.equal(KPixel.shouldFilterSurface("home", "video"), true);
   assert.equal(KPixel.shouldFilterSurface("feed", "shorts"), true);
+  assert.equal(KPixel.shouldFilterSurface("shorts", "shorts"), true);
   assert.equal(KPixel.shouldFilterSurface("watch", "comment"), true);
   assert.equal(KPixel.shouldFilterSurface("watch", "video"), true);
 });

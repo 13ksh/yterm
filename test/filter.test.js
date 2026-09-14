@@ -67,7 +67,7 @@ test("filterYoutubePayload drops t comments", () => {
   assert.equal(data.comments.length, 0);
 });
 
-test("shouldInterceptYoutubeiUrl skips search and player", () => {
+test("shouldInterceptYoutubeiUrl skips search, player, and current reel watch", () => {
   assert.equal(
     KPixel.shouldInterceptYoutubeiUrl(
       "https://www.youtube.com/youtubei/v1/browse"
@@ -89,6 +89,18 @@ test("shouldInterceptYoutubeiUrl skips search and player", () => {
       "https://www.youtube.com/youtubei/v1/player"
     ),
     false
+  );
+  assert.equal(
+    KPixel.shouldInterceptYoutubeiUrl(
+      "https://www.youtube.com/youtubei/v1/reel/reel_item_watch"
+    ),
+    false
+  );
+  assert.equal(
+    KPixel.shouldInterceptYoutubeiUrl(
+      "https://www.youtube.com/youtubei/v1/reel/reel_watch_sequence"
+    ),
+    true
   );
 });
 
@@ -113,8 +125,18 @@ test("shouldIngestYoutubeiUrl keeps player and reel maps without filtering them"
 
 test("shorts page drops t reel items so people never see them", () => {
   const tId = "UCmmlHsRZzocU9UrXM2mcsng";
+  const fId = "UCXuqSBlHAE6Xw-yeJA0Tunw";
   const data = {
     contents: [
+      {
+        reelItemRenderer: {
+          videoId: "shortOne11",
+          navigationEndpoint: {
+            reelWatchEndpoint: { videoId: "shortOne11" },
+          },
+          owner: { browseId: fId },
+        },
+      },
       {
         reelItemRenderer: {
           videoId: "OB1uQrVzO9I",
@@ -124,10 +146,43 @@ test("shorts page drops t reel items so people never see them", () => {
           owner: { browseId: tId },
         },
       },
+      {
+        reelItemRenderer: {
+          videoId: "shortThree",
+          navigationEndpoint: {
+            reelWatchEndpoint: { videoId: "shortThree" },
+          },
+          owner: { browseId: fId },
+        },
+      },
     ],
   };
   const dropped = {};
-  KPixel.filterYoutubePayload(data, { [tId]: "t" }, "shorts", dropped);
-  assert.equal(data.contents.length, 0);
+  KPixel.filterYoutubePayload(data, { [tId]: "t", [fId]: "f" }, "shorts", dropped);
+  assert.equal(data.contents.length, 2);
+  assert.equal(data.contents[0].reelItemRenderer.videoId, "shortOne11");
+  assert.equal(data.contents[1].reelItemRenderer.videoId, "shortThree");
   assert.equal(dropped.OB1uQrVzO9I, tId);
+});
+
+test("hiding the middle short keeps the previous clip as the neighbor", () => {
+  const ids = ["oneShort", "twoShort", "thrShort"];
+  const dropped = (id) => id === "twoShort";
+  assert.equal(KPixel.nextKeptShortId(ids, "twoShort", dropped), "thrShort");
+  assert.equal(
+    KPixel.nextKeptShortId(ids, "twoShort", (id) => id === "twoShort" || id === "thrShort"),
+    "oneShort"
+  );
+
+  const seq = {
+    contents: [
+      { reelItemRenderer: { videoId: "oneShort" } },
+      { reelItemRenderer: { videoId: "twoShort" } },
+      { reelItemRenderer: { videoId: "thrShort" } },
+    ],
+  };
+  KPixel.spliceVideoFromNode(seq, "twoShort", 0, new Set());
+  const kept = seq.contents.map((row) => row.reelItemRenderer.videoId);
+  assert.deepEqual(kept, ["oneShort", "thrShort"]);
+  assert.equal(kept[kept.indexOf("thrShort") - 1], "oneShort");
 });

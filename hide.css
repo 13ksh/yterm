@@ -2,6 +2,10 @@
   display: none !important;
 }
 
-[data-kpixel-hide="1"] video {
-  opacity: 0 !important;
+#kpixel-hide-cover {
+  position: fixed;
+  inset: 0;
+  z-index: 2147483646;
+  background: #0f0f0f;
+  pointer-events: none;
 }
