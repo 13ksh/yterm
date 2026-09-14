@@ -43,7 +43,11 @@ async function proxyFlag(channelId, res) {
 
 async function staticFile(urlPath, res) {
   let rel = decodeURIComponent(urlPath.split("?")[0]);
-  if (rel === "/") rel = "/demo/index.html";
+  if (rel === "/") {
+    send(res, 302, "redirect", { Location: "/demo/" });
+    return;
+  }
+  if (rel === "/favicon.ico") rel = "/icons/icon32.png";
   if (rel === "/demo" || rel === "/demo/") rel = "/demo/index.html";
   const file = path.normalize(path.join(ROOT, rel));
   if (!file.startsWith(ROOT)) {
