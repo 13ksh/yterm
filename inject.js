@@ -74,23 +74,6 @@
     });
   }
 
-  function shouldForceOneSecond(url, body) {
-    if (!enabled || pageKind() !== "shorts") return false;
-    const vid =
-      KPixel.extractWatchtimeVideoId(url, body) ||
-      KPixel.extractVideoId(location.pathname);
-    if (!vid) return false;
-    const ch = videoMap[vid];
-    return !!(ch && flags[ch] === "t");
-  }
-
-  function rewriteOutgoing(url, body) {
-    if (!shouldForceOneSecond(url, body)) {
-      return { url: url, body: body };
-    }
-    return KPixel.rewriteWatchtimeRequest(url, body == null ? "" : body);
-  }
-
   function stringifyBody(body) {
     if (body == null) return "";
     if (typeof body === "string") return body;
@@ -100,8 +83,123 @@
     return "";
   }
 
+  function ingest(data) {
+    if (!data) return;
+    const indexed = KPixel.indexYoutubeMedia(data, null, 0);
+    Object.assign(videoMap, indexed.videos);
+    Object.assign(commentMap, indexed.comments);
+    if (indexed.ownerHint) {
+      const vid = KPixel.extractVideoId(location.pathname);
+      if (vid && !videoMap[vid]) videoMap[vid] = indexed.ownerHint;
+    }
+  }
+
+  function scrapeActiveShortChannel() {
+    if (pageKind() !== "shorts") return;
+    const vid = KPixel.extractVideoId(location.pathname);
+    if (!vid) return;
+    try {
+      document
+        .querySelectorAll(
+          "#movie_player, #shorts-player, .html5-video-player"
+        )
+        .forEach((player) => {
+          if (typeof player.getPlayerResponse === "function") {
+            ingest(player.getPlayerResponse());
+          }
+        });
+    } catch {
+      /* player not ready */
+    }
+    const roots = document.querySelectorAll(
+      "ytd-reel-video-renderer[is-active], ytd-reel-video-renderer[active], ytd-reel-player-header-renderer, ytd-reel-player-overlay-renderer, ytd-shorts, ytm-reel-player-overlay-renderer"
+    );
+    roots.forEach((el) => {
+      try {
+        const data =
+          el.data || (el.__data && (el.__data.data || el.__data)) || null;
+        if (data) ingest(data);
+      } catch {
+        /* ignore */
+      }
+      if (videoMap[vid]) return;
+      const link =
+        el.querySelector && el.querySelector('a[href*="/channel/"]');
+      if (!link) return;
+      const parsed = KPixel.parseChannelHref(
+        link.getAttribute("href") || link.href
+      );
+      if (parsed.channelId) videoMap[vid] = parsed.channelId;
+    });
+  }
+
+  function refreshMediaMaps() {
+    if (window.ytInitialData) ingest(window.ytInitialData);
+    if (window.ytInitialPlayerResponse) ingest(window.ytInitialPlayerResponse);
+    scrapeActiveShortChannel();
+  }
+
+  function shouldForceOneSecond(url, body) {
+    return KPixel.shouldRewriteShortsWatchtime(
+      pageKind(),
+      enabled,
+      flags,
+      videoMap,
+      url,
+      body,
+      location.pathname
+    );
+  }
+
+  function rewriteOutgoing(url, body) {
+    if (!shouldForceOneSecond(url, body)) {
+      return { url: url, body: body };
+    }
+    return KPixel.rewriteWatchtimeRequest(url, body == null ? "" : body);
+  }
+
+  function shortsWatchtimeNeedsWait(url, body) {
+    if (!enabled || pageKind() !== "shorts" || !KPixel.isWatchtimeUrl(url)) {
+      return false;
+    }
+    refreshMediaMaps();
+    const vid =
+      KPixel.extractWatchtimeVideoId(url, body) ||
+      KPixel.extractVideoId(location.pathname);
+    const ch = vid && videoMap[vid];
+    return !!(ch && flags[ch] === undefined);
+  }
+
+  async function prepareWatchtime(url, body) {
+    const bodyStr = stringifyBody(body);
+    if (!enabled || pageKind() !== "shorts" || !KPixel.isWatchtimeUrl(url)) {
+      return { url: url, body: body };
+    }
+    refreshMediaMaps();
+    const vid =
+      KPixel.extractWatchtimeVideoId(url, bodyStr) ||
+      KPixel.extractVideoId(location.pathname);
+    const ch = vid && videoMap[vid];
+    if (ch && flags[ch] === undefined) await lookup([ch]);
+    if (
+      KPixel.shouldRewriteShortsWatchtime(
+        pageKind(),
+        enabled,
+        flags,
+        videoMap,
+        url,
+        bodyStr,
+        location.pathname
+      )
+    ) {
+      return KPixel.rewriteWatchtimeRequest(url, bodyStr);
+    }
+    return { url: url, body: body };
+  }
+
   let skipTimer = 0;
   let skipVid = null;
+  let shortFlagLookup = false;
 
   function goNextShort() {
     const btn =
@@ -131,10 +229,22 @@
       clearTimeout(skipTimer);
       return;
     }
+    refreshMediaMaps();
     const vid = KPixel.extractVideoId(location.pathname);
     if (!vid) return;
     const ch = videoMap[vid];
-    if (!ch || flags[ch] !== "t") {
+    if (!ch) return;
+    if (flags[ch] === undefined) {
+      if (!shortFlagLookup) {
+        shortFlagLookup = true;
+        lookup([ch]).finally(() => {
+          shortFlagLookup = false;
+          tickShortsOneSecond();
+        });
+      }
+      return;
+    }
+    if (flags[ch] !== "t") {
       if (skipVid !== vid) {
         clearTimeout(skipTimer);
         skipVid = null;
@@ -149,14 +259,7 @@
     }, 1000);
   }
 
-  function ingest(data) {
-    if (!data) return;
-    const indexed = KPixel.indexYoutubeMedia(data, null, 0);
-    Object.assign(videoMap, indexed.videos);
-    Object.assign(commentMap, indexed.comments);
-  }
-
-  async function filterText(text) {
+  async function filterText(text, filterPayload) {
     if (!enabled) return text;
     if (!text || (text[0] !== "{" && text[0] !== "[")) return text;
     let data;
@@ -165,21 +268,30 @@
     } catch {
       return text;
     }
-    const kind = pageKind();
     ingest(data);
-    if (kind === "search") return text;
-    await lookup(KPixel.collectChannelIdsFromPayload(data));
-    KPixel.filterYoutubePayload(data, flags, kind);
-    return JSON.stringify(data);
+    const kind = pageKind();
+    const ids = KPixel.collectChannelIdsFromPayload(data).concat(
+      Object.values(videoMap)
+    );
+    await lookup(ids);
+    if (filterPayload && kind !== "search") {
+      KPixel.filterYoutubePayload(data, flags, kind);
+      return JSON.stringify(data);
+    }
+    return text;
   }
 
-  function filterObject(data) {
+  function filterObject(data, filterPayload) {
     if (!data) return data;
     ingest(data);
     if (!enabled || pageKind() === "search") return data;
     try {
-      lookup(KPixel.collectChannelIdsFromPayload(data));
-      KPixel.filterYoutubePayload(data, flags, pageKind());
+      lookup(
+        KPixel.collectChannelIdsFromPayload(data).concat(Object.values(videoMap))
+      );
+      if (filterPayload !== false) {
+        KPixel.filterYoutubePayload(data, flags, pageKind());
+      }
     } catch {
       /* keep original */
     }
@@ -243,7 +355,11 @@
   }
 
   function applyAll() {
-    if (window.ytInitialData) ingest(window.ytInitialData);
+    refreshMediaMaps();
+    lookup(Object.values(videoMap)).then(() => {
+      applyDomHides();
+      tickShortsOneSecond();
+    });
     applyDomHides();
     tickShortsOneSecond();
   }
@@ -270,43 +386,42 @@
           }
         }
         const bodyStr = stringifyBody(body);
-        if (shouldForceOneSecond(url, bodyStr)) {
-          const rewritten = rewriteOutgoing(url, bodyStr);
-          if (req && (!init || init.body == null)) {
-            nextInput = rewritten.url;
-            nextInit = {
-              method: req.method,
-              headers: req.headers,
-              body:
-                req.method === "GET" || req.method === "HEAD"
-                  ? undefined
-                  : rewritten.body,
-              credentials: req.credentials,
-              cache: req.cache,
-              mode: req.mode,
-              redirect: req.redirect,
-              referrer: req.referrer,
-            };
-          } else {
-            nextInput = rewritten.url;
-            nextInit = Object.assign({}, init || {}, {
-              body:
-                init && init.body != null ? rewritten.body : init && init.body,
-            });
+        if (KPixel.isWatchtimeUrl(url) && pageKind() === "shorts") {
+          const rewritten = await prepareWatchtime(url, bodyStr);
+          if (rewritten.url !== url || rewritten.body !== body) {
+            if (req && (!init || init.body == null)) {
+              nextInput = rewritten.url;
+              nextInit = {
+                method: req.method,
+                headers: req.headers,
+                body:
+                  req.method === "GET" || req.method === "HEAD"
+                    ? undefined
+                    : rewritten.body,
+                credentials: req.credentials,
+                cache: req.cache,
+                mode: req.mode,
+                redirect: req.redirect,
+                referrer: req.referrer,
+              };
+            } else {
+              nextInput = rewritten.url;
+              nextInit = Object.assign({}, init || {}, {
+                body:
+                  init && init.body != null ? rewritten.body : init && init.body,
+              });
+            }
+            url = rewritten.url;
           }
-          url = rewritten.url;
         }
         const res = await origFetch.call(window, nextInput, nextInit);
-        if (
-          !enabled ||
-          !KPixel.shouldInterceptYoutubeiUrl(url) ||
-          pageKind() === "search"
-        ) {
-          return res;
-        }
+        if (!enabled || pageKind() === "search") return res;
+        const ingestIt = KPixel.shouldIngestYoutubeiUrl(url);
+        const filterIt = KPixel.shouldInterceptYoutubeiUrl(url);
+        if (!ingestIt) return res;
         try {
           const text = await res.clone().text();
-          const next = await filterText(text);
+          const next = await filterText(text, filterIt);
           if (next === text) return res;
           return new Response(next, {
             status: res.status,
@@ -325,7 +440,23 @@
 
   const xhrOpen = XMLHttpRequest.prototype.open;
   const xhrSend = XMLHttpRequest.prototype.send;
+  const xhrSetHeader = XMLHttpRequest.prototype.setRequestHeader;
   XMLHttpRequest.prototype.open = function (method, url, ...rest) {
+    this.__kpixelMethod = method;
+    this.__kpixelRawUrl = url;
+    this.__kpixelRest = rest;
+    this.__kpixelAsync = rest.length === 0 || rest[0] !== false;
+    this.__kpixelHeaders = [];
+    if (
+      this.__kpixelAsync &&
+      enabled &&
+      pageKind() === "shorts" &&
+      KPixel.isWatchtimeUrl(url)
+    ) {
+      this.__kpixelDeferWatchtime = true;
+      this.__kpixelUrl = url;
+      return;
+    }
     let nextUrl = url;
     if (shouldForceOneSecond(url, "")) {
       nextUrl = rewriteOutgoing(url, "").url;
@@ -333,17 +464,50 @@
     this.__kpixelUrl = nextUrl;
     return xhrOpen.call(this, method, nextUrl, ...rest);
   };
+  XMLHttpRequest.prototype.setRequestHeader = function (key, value) {
+    if (this.__kpixelDeferWatchtime) {
+      this.__kpixelHeaders.push([key, value]);
+      return;
+    }
+    return xhrSetHeader.call(this, key, value);
+  };
   XMLHttpRequest.prototype.send = function (body) {
-    let nextBody = body;
     const bodyStr = stringifyBody(body);
-    if (shouldForceOneSecond(this.__kpixelUrl, bodyStr) && bodyStr) {
-      nextBody = rewriteOutgoing(this.__kpixelUrl, bodyStr).body;
+    const flushDeferred = (nextUrl, nextBody) => {
+      xhrOpen.call(
+        this,
+        this.__kpixelMethod,
+        nextUrl,
+        ...this.__kpixelRest
+      );
+      for (const [key, value] of this.__kpixelHeaders || []) {
+        xhrSetHeader.call(this, key, value);
+      }
+      xhrSend.call(this, nextBody);
+    };
+    if (this.__kpixelDeferWatchtime) {
+      prepareWatchtime(this.__kpixelRawUrl, bodyStr)
+        .then((next) => {
+          flushDeferred(
+            next.url,
+            typeof next.body === "string" && next.body ? next.body : body
+          );
+        })
+        .catch(() => flushDeferred(this.__kpixelRawUrl, body));
+      return;
+    }
+    const url = this.__kpixelUrl;
+    const sendNow = (nextBody) => xhrSend.call(this, nextBody);
+    let nextBody = body;
+    if (shouldForceOneSecond(url, bodyStr) && bodyStr) {
+      nextBody = rewriteOutgoing(url, bodyStr).body;
     }
     if (
       enabled &&
-      KPixel.shouldInterceptYoutubeiUrl(this.__kpixelUrl) &&
+      KPixel.shouldIngestYoutubeiUrl(this.__kpixelUrl) &&
       pageKind() !== "search"
     ) {
+      const filterIt = KPixel.shouldInterceptYoutubeiUrl(this.__kpixelUrl);
       this.addEventListener(
         "readystatechange",
         function () {
@@ -353,7 +517,12 @@
             if (!raw || (raw[0] !== "{" && raw[0] !== "[")) return;
             const data = JSON.parse(raw);
             ingest(data);
-            lookup(KPixel.collectChannelIdsFromPayload(data));
+            lookup(
+              KPixel.collectChannelIdsFromPayload(data).concat(
+                Object.values(videoMap)
+              )
+            );
+            if (!filterIt) return;
             KPixel.filterYoutubePayload(data, flags, pageKind());
             const next = JSON.stringify(data);
             Object.defineProperty(this, "responseText", {
@@ -371,26 +540,51 @@
         true
       );
     }
-    return xhrSend.call(this, nextBody);
+    return sendNow(nextBody);
   };
 
   const origBeacon = navigator.sendBeacon.bind(navigator);
   navigator.sendBeacon = function (url, data) {
     try {
-      if (data == null || typeof data === "string") {
-        const next = rewriteOutgoing(url, data || "");
-        return origBeacon(next.url, next.body || undefined);
-      }
-      if (typeof URLSearchParams !== "undefined" && data instanceof URLSearchParams) {
-        const next = rewriteOutgoing(url, data.toString());
-        return origBeacon(next.url, next.body);
-      }
-      if (typeof Blob !== "undefined" && data instanceof Blob) {
-        data.text().then((text) => {
-          const next = rewriteOutgoing(url, text);
-          origBeacon(next.url, new Blob([next.body], { type: data.type }));
-        });
-        return true;
+      if (enabled && pageKind() === "shorts" && KPixel.isWatchtimeUrl(url)) {
+        const deliver = (next, original) => {
+          if (original == null || typeof original === "string") {
+            return origBeacon(next.url, next.body || undefined);
+          }
+          if (
+            typeof URLSearchParams !== "undefined" &&
+            original instanceof URLSearchParams
+          ) {
+            return origBeacon(next.url, next.body);
+          }
+          if (typeof Blob !== "undefined" && original instanceof Blob) {
+            origBeacon(next.url, new Blob([next.body || ""], { type: original.type }));
+            return true;
+          }
+          return origBeacon(next.url, original);
+        };
+        if (data == null || typeof data === "string") {
+          if (!shortsWatchtimeNeedsWait(url, data || "")) {
+            const next = rewriteOutgoing(url, data || "");
+            return origBeacon(next.url, next.body || undefined);
+          }
+          prepareWatchtime(url, data || "").then((next) => deliver(next, data));
+          return true;
+        }
+        if (typeof URLSearchParams !== "undefined" && data instanceof URLSearchParams) {
+          if (!shortsWatchtimeNeedsWait(url, data.toString())) {
+            const next = rewriteOutgoing(url, data.toString());
+            return origBeacon(next.url, next.body);
+          }
+          prepareWatchtime(url, data.toString()).then((next) => deliver(next, data));
+          return true;
+        }
+        if (typeof Blob !== "undefined" && data instanceof Blob) {
+          data.text().then((text) => {
+            prepareWatchtime(url, text).then((next) => deliver(next, data));
+          });
+          return true;
+        }
       }
     } catch {
       /* fall through */
@@ -411,6 +605,17 @@
       enumerable: imgSrc.enumerable,
       get: imgSrc.get,
       set(value) {
+        const url = String(value || "");
+        if (enabled && pageKind() === "shorts" && KPixel.isWatchtimeUrl(url)) {
+          if (!shortsWatchtimeNeedsWait(url, "")) {
+            imgSrc.set.call(this, rewriteMaybeSrc(value));
+            return;
+          }
+          prepareWatchtime(url, "").then((next) => {
+            imgSrc.set.call(this, next.url);
+          });
+          return;
+        }
         imgSrc.set.call(this, rewriteMaybeSrc(value));
       },
     });
@@ -422,12 +627,23 @@
       this instanceof HTMLImageElement &&
       String(name).toLowerCase() === "src"
     ) {
+      const url = String(value || "");
+      if (enabled && pageKind() === "shorts" && KPixel.isWatchtimeUrl(url)) {
+        if (!shortsWatchtimeNeedsWait(url, "")) {
+          value = rewriteMaybeSrc(value);
+          return origSetAttribute.call(this, name, value);
+        }
+        prepareWatchtime(url, "").then((next) => {
+          origSetAttribute.call(this, name, next.url);
+        });
+        return;
+      }
       value = rewriteMaybeSrc(value);
     }
     return origSetAttribute.call(this, name, value);
   };
 
-  function trapInitialData(name) {
+  function trapInitialData(name, filterPayload) {
     let current;
     Object.defineProperty(window, name, {
       configurable: true,
@@ -437,16 +653,23 @@
       },
       set(value) {
         current = value;
-        filterObject(value);
+        filterObject(value, filterPayload);
         applyDomHides();
+        tickShortsOneSecond();
       },
     });
   }
 
   if (!Object.getOwnPropertyDescriptor(window, "ytInitialData")) {
-    trapInitialData("ytInitialData");
+    trapInitialData("ytInitialData", true);
   } else if (window.ytInitialData) {
-    filterObject(window.ytInitialData);
+    filterObject(window.ytInitialData, true);
+  }
+
+  if (!Object.getOwnPropertyDescriptor(window, "ytInitialPlayerResponse")) {
+    trapInitialData("ytInitialPlayerResponse", false);
+  } else if (window.ytInitialPlayerResponse) {
+    filterObject(window.ytInitialPlayerResponse, false);
   }
 
   const observer = new MutationObserver(() => {

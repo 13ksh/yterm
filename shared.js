@@ -343,6 +343,9 @@ var KPixel = (function () {
       return;
     }
     if (typeof node === "object") {
+      if (node.videoDetails && pickUc(node.videoDetails.channelId)) {
+        out.add(node.videoDetails.channelId);
+      }
       for (const value of Object.values(node)) {
         collectFromRenderers(value, out, depth + 1);
       }
@@ -355,6 +358,15 @@ var KPixel = (function () {
     if (u.includes("/youtubei/v1/player")) return false;
     if (u.includes("/youtubei/v1/log")) return false;
     return u.includes("/youtubei/v1/");
+  }
+
+  /** Player/reel JSON is ingested for video→channel maps, but never stripped. */
+  function shouldIngestYoutubeiUrl(url) {
+    const u = String(url || "");
+    if (!u.includes("/youtubei/v1/")) return false;
+    if (u.includes("/youtubei/v1/search")) return false;
+    if (u.includes("/youtubei/v1/log")) return false;
+    return true;
   }
 
   function isWatchtimeUrl(url) {
@@ -373,11 +385,12 @@ var KPixel = (function () {
   function forceOneSecondWatchParams(sp) {
     if (!sp || typeof sp.get !== "function") return sp;
     const et = sp.get("et");
-    if (et != null && et.includes(":") && !et.includes(",")) {
+    const range = et != null && et.includes(":") && !et.includes(",");
+    if (range) {
       sp.set("st", "0.000:0.000");
       sp.set("et", "0.000:1.000");
     } else {
-      if (sp.has("st")) sp.set("st", "0.000");
+      if (sp.has("st") || (et != null && et.includes(","))) sp.set("st", "0.000");
       sp.set("et", "1.000");
     }
     if (sp.has("cmt")) sp.set("cmt", "1.000");
@@ -450,8 +463,51 @@ var KPixel = (function () {
     return { url: nextUrl, body: nextBody };
   }
 
+  function shouldRewriteShortsWatchtime(
+    kind,
+    isEnabled,
+    flagMap,
+    videos,
+    url,
+    body,
+    pathname
+  ) {
+    if (!isEnabled || kind !== "shorts") return false;
+    if (!isWatchtimeUrl(url)) return false;
+    const vid =
+      extractWatchtimeVideoId(url, body) || extractVideoId(pathname || "");
+    if (!vid || !videos) return false;
+    const ch = videos[vid];
+    return !!(ch && flagMap && flagMap[ch] === "t");
+  }
+
+  function ownerChannelFromWatchNext(node, depth) {
+    if (!node || depth > 12) return null;
+    if (Array.isArray(node)) {
+      for (const item of node) {
+        const ch = ownerChannelFromWatchNext(item, depth + 1);
+        if (ch) return ch;
+      }
+      return null;
+    }
+    if (typeof node !== "object") return null;
+    if (node.videoSecondaryInfoRenderer) {
+      return extractChannelIdFromData(node.videoSecondaryInfoRenderer);
+    }
+    if (node.reelPlayerHeaderRenderer) {
+      return extractChannelIdFromData(node.reelPlayerHeaderRenderer);
+    }
+    for (const value of Object.values(node)) {
+      if (value && typeof value === "object") {
+        const ch = ownerChannelFromWatchNext(value, depth + 1);
+        if (ch) return ch;
+      }
+    }
+    return null;
+  }
+
   function indexYoutubeMedia(node, out, depth) {
-    if (!out) out = { videos: {}, comments: {} };
+    if (!out) out = { videos: {}, comments: {}, ownerHint: null };
     if (!node || depth > 22) return out;
     if (Array.isArray(node)) {
       for (const item of node) indexYoutubeMedia(item, out, depth + 1);
@@ -459,12 +515,50 @@ var KPixel = (function () {
     }
     if (typeof node !== "object") return out;
 
+    const details = node.videoDetails;
+    if (details && details.videoId) {
+      const ch = pickUc(details.channelId) || extractChannelIdFromData(details);
+      if (ch) out.videos[details.videoId] = ch;
+    }
+
+    const micro =
+      node.playerMicroformatRenderer ||
+      (node.microformat && node.microformat.playerMicroformatRenderer);
+    if (micro) {
+      const ch = pickUc(micro.externalChannelId) || pickUc(micro.channelId);
+      const vid =
+        micro.videoId ||
+        (details && details.videoId) ||
+        extractVideoId(JSON.stringify(micro).slice(0, 4000));
+      if (ch && vid) out.videos[vid] = ch;
+    }
+
+    if (node.reelPlayerHeaderRenderer) {
+      const ch = extractChannelIdFromData(node.reelPlayerHeaderRenderer);
+      if (ch) out.ownerHint = ch;
+    }
+
+    if (node.currentVideoEndpoint) {
+      const ep =
+        node.currentVideoEndpoint.reelWatchEndpoint ||
+        node.currentVideoEndpoint.watchEndpoint ||
+        {};
+      const vid = ep.videoId;
+      if (vid && !out.videos[vid]) {
+        const ch =
+          (details && pickUc(details.channelId)) ||
+          ownerChannelFromWatchNext(node.contents || node.playerOverlays || node, 0);
+        if (ch) out.videos[vid] = ch;
+      }
+    }
+
     const videoObj =
       node.videoRenderer ||
       node.compactVideoRenderer ||
       node.gridVideoRenderer ||
       node.reelItemRenderer ||
-      node.playlistVideoRenderer;
+      node.playlistVideoRenderer ||
+      node.endScreenVideoRenderer;
     if (videoObj && videoObj.videoId) {
       const ch = extractChannelIdFromData(videoObj) || extractChannelIdFromData(node);
       if (ch) out.videos[videoObj.videoId] = ch;
@@ -539,8 +633,10 @@ var KPixel = (function () {
     filterYoutubePayload,
     collectChannelIdsFromPayload,
     shouldInterceptYoutubeiUrl,
+    shouldIngestYoutubeiUrl,
     shouldDropPayloadItem,
     indexYoutubeMedia,
+    shouldRewriteShortsWatchtime,
     isWatchtimeUrl,
     extractWatchtimeVideoId,
     forceOneSecondWatchParams,

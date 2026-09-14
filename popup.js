@@ -49,7 +49,7 @@ async function refresh() {
     ? kind === "search"
       ? "이 탭은 검색이라 결과를 그대로 둡니다."
       : kind === "shorts"
-        ? "t 채널 쇼츠는 1초 시청으로 남기고 다음으로 넘깁니다."
+        ? "지금 뜬 t 채널 쇼츠는 내부적으로 1초만 본 것으로 남기고 다음으로 넘깁니다."
         : "t 채널 항목을 이 페이지에서 숨기고 있습니다."
     : "필터가 꺼져 있습니다.";
 
@@ -99,7 +99,8 @@ async function runLookup() {
   const res = await send({ type: "LOOKUP_ONE", channelId: id });
   const flag = res && res.flag;
   if (flag === "t") {
-    $("lookupResult").textContent = "t · 피드·댓글·게시물·쇼츠에서 숨깁니다. 검색은 남깁니다.";
+        $("lookupResult").textContent =
+          "t · 피드·댓글·게시물에서 숨깁니다. 쇼츠 피드는 1초 시청으로 남깁니다. 검색은 그대로 둡니다.";
     $("lookupResult").className = "result t";
   } else if (flag === "f") {
     $("lookupResult").textContent = "f · 숨기지 않습니다.";

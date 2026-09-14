@@ -91,3 +91,43 @@ test("shouldInterceptYoutubeiUrl skips search and player", () => {
     false
   );
 });
+
+test("shouldIngestYoutubeiUrl keeps player and reel maps without filtering them", () => {
+  assert.equal(
+    KPixel.shouldIngestYoutubeiUrl(
+      "https://www.youtube.com/youtubei/v1/player?prettyPrint=false"
+    ),
+    true
+  );
+  assert.equal(
+    KPixel.shouldIngestYoutubeiUrl(
+      "https://www.youtube.com/youtubei/v1/reel/reel_item_watch"
+    ),
+    true
+  );
+  assert.equal(
+    KPixel.shouldIngestYoutubeiUrl("https://www.youtube.com/youtubei/v1/search"),
+    false
+  );
+});
+
+test("shorts page keeps t reel items so watchtime can be rewritten", () => {
+  const tId = "UCmmlHsRZzocU9UrXM2mcsng";
+  const data = {
+    contents: [
+      {
+        reelItemRenderer: {
+          videoId: "OB1uQrVzO9I",
+          navigationEndpoint: {
+            reelWatchEndpoint: { videoId: "OB1uQrVzO9I" },
+          },
+          owner: { browseId: tId },
+        },
+      },
+    ],
+  };
+  KPixel.filterYoutubePayload(data, { [tId]: "t" }, "shorts");
+  assert.equal(data.contents.length, 1);
+  KPixel.filterYoutubePayload(data, { [tId]: "t" }, "home");
+  assert.equal(data.contents.length, 0);
+});
