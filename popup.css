@@ -117,6 +117,10 @@ footer,
   font-size: 22px;
 }
 
+.usage-kicker-sub {
+  margin-top: 10px;
+}
+
 .usage-avg {
   margin-top: 8px;
   font-size: 12px;

@@ -98,13 +98,13 @@
   function noteWatched(vid) {
     if (!enabled || !vid) return;
     pendingUsage.watched.add(vid);
-    if (!usageTimer) usageTimer = setTimeout(flushUsage, 250);
+    if (!usageTimer) usageTimer = setTimeout(flushUsage, 0);
   }
 
   function noteBlocked(vid) {
     if (!enabled || !vid) return;
     pendingUsage.blocked.add(vid);
-    if (!usageTimer) usageTimer = setTimeout(flushUsage, 250);
+    if (!usageTimer) usageTimer = setTimeout(flushUsage, 0);
   }
 
   function trackDroppedVideos(dropped) {

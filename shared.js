@@ -770,7 +770,7 @@ var KPixel = (function () {
     return out;
   }
 
-  const USAGE_KEEP_DAYS = 60;
+  const USAGE_KEEP_DAYS = 0;
 
   function localDayKey(now) {
     const d = now instanceof Date ? now : new Date(now || Date.now());
@@ -784,10 +784,22 @@ var KPixel = (function () {
     return { watched: {}, blocked: {} };
   }
 
+  function emptyUsageSafe() {
+    return {
+      totalWatched: 0,
+      totalBlocked: 0,
+      todayKey: "",
+      todayWatched: 0,
+      todayBlocked: 0,
+      firstDay: "",
+      updatedAt: 0,
+    };
+  }
+
   function pruneUsageDays(days, keepDays) {
-    const keep = keepDays == null ? USAGE_KEEP_DAYS : keepDays;
+    if (keepDays == null || keepDays <= 0) return days;
     const keys = Object.keys(days || {}).sort();
-    while (keys.length > keep) {
+    while (keys.length > keepDays) {
       delete days[keys.shift()];
     }
     return days;
@@ -801,7 +813,7 @@ var KPixel = (function () {
     for (const id of ids || []) {
       if (id) store[dayKey][bucket][String(id)] = 1;
     }
-    pruneUsageDays(store, keepDays);
+    if (keepDays > 0) pruneUsageDays(store, keepDays);
     return store;
   }
 
@@ -827,12 +839,51 @@ var KPixel = (function () {
     }
     const today = store[todayKey] || emptyDayUsage();
     return {
+      todayKey: todayKey || "",
       todayWatched: countUsageBucket(today, "watched"),
       todayBlocked: countUsageBucket(today, "blocked"),
+      totalWatched: watchedSum,
+      totalBlocked: blockedSum,
       avgWatched: activeDays ? watchedSum / activeDays : 0,
       avgBlocked: activeDays ? blockedSum / activeDays : 0,
       days: activeDays,
     };
+  }
+
+  function bumpUsageSafe(safe, todayKey, addedWatched, addedBlocked) {
+    const next = Object.assign(emptyUsageSafe(), safe && typeof safe === "object" ? safe : {});
+    const w = Math.max(0, Number(addedWatched) || 0);
+    const b = Math.max(0, Number(addedBlocked) || 0);
+    if (todayKey && next.todayKey !== todayKey) {
+      next.todayKey = todayKey;
+      next.todayWatched = 0;
+      next.todayBlocked = 0;
+    }
+    next.totalWatched = (Number(next.totalWatched) || 0) + w;
+    next.totalBlocked = (Number(next.totalBlocked) || 0) + b;
+    next.todayWatched = (Number(next.todayWatched) || 0) + w;
+    next.todayBlocked = (Number(next.todayBlocked) || 0) + b;
+    if (todayKey && !next.firstDay) next.firstDay = todayKey;
+    next.updatedAt = Date.now();
+    return next;
+  }
+
+  function mergeUsageSafe(summary, safe) {
+    const snap = summary && typeof summary === "object" ? summary : summarizeUsage({}, "");
+    const hold = safe && typeof safe === "object" ? safe : emptyUsageSafe();
+    const out = Object.assign({}, snap);
+    out.totalWatched = Math.max(snap.totalWatched || 0, Number(hold.totalWatched) || 0);
+    out.totalBlocked = Math.max(snap.totalBlocked || 0, Number(hold.totalBlocked) || 0);
+    if (!hold.todayKey || hold.todayKey === snap.todayKey) {
+      out.todayWatched = Math.max(snap.todayWatched || 0, Number(hold.todayWatched) || 0);
+      out.todayBlocked = Math.max(snap.todayBlocked || 0, Number(hold.todayBlocked) || 0);
+    }
+    if (hold.firstDay && !out.firstDay) out.firstDay = hold.firstDay;
+    out.days = Math.max(
+      snap.days || 0,
+      out.totalWatched || out.totalBlocked ? 1 : 0
+    );
+    return out;
   }
 
   function formatUsageNumber(n) {
@@ -887,9 +938,12 @@ var KPixel = (function () {
     USAGE_KEEP_DAYS,
     localDayKey,
     emptyDayUsage,
+    emptyUsageSafe,
     addUsageIds,
     countUsageBucket,
     summarizeUsage,
+    bumpUsageSafe,
+    mergeUsageSafe,
     formatUsageNumber,
   };
 

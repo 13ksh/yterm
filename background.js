@@ -11,14 +11,19 @@ const memory = {
   forceT: [],
   stats: { lookups: 0, hidden: 0, flagged: 0 },
   usageDays: {},
+  usageSafe: KPixel.emptyUsageSafe(),
 };
 
 const inflight = new Map();
 let persistTimer = 0;
+let usageChain = Promise.resolve();
+const stateReady = loadState();
 
 chrome.runtime.onInstalled.addListener(() => {
-  chrome.storage.local.get({ enabled: true }, (s) => {
-    memory.enabled = s.enabled !== false;
+  stateReady.then(() => {
+    chrome.storage.local.get({ enabled: true }, (s) => {
+      memory.enabled = s.enabled !== false;
+    });
   });
 });
 
@@ -29,12 +34,30 @@ async function loadState() {
     forceT: [],
     stats: { lookups: 0, hidden: 0, flagged: 0 },
     usageDays: {},
+    usageSafe: KPixel.emptyUsageSafe(),
   });
   memory.cache = stored.cache || {};
   memory.enabled = stored.enabled !== false;
   memory.forceT = Array.isArray(stored.forceT) ? stored.forceT : [];
   memory.stats = stored.stats || { lookups: 0, hidden: 0, flagged: 0 };
   memory.usageDays = stored.usageDays || {};
+  const summary = KPixel.summarizeUsage(
+    memory.usageDays,
+    KPixel.localDayKey()
+  );
+  memory.usageSafe = KPixel.mergeUsageSafe(
+    summary,
+    stored.usageSafe || KPixel.emptyUsageSafe()
+  );
+  await persistUsageNow();
+}
+
+function usageView() {
+  const summary = KPixel.summarizeUsage(
+    memory.usageDays,
+    KPixel.localDayKey()
+  );
+  return KPixel.mergeUsageSafe(summary, memory.usageSafe);
 }
 
 function schedulePersist() {
@@ -45,9 +68,49 @@ function schedulePersist() {
       cache: memory.cache,
       enabled: memory.enabled,
       stats: memory.stats,
-      usageDays: memory.usageDays,
     });
   }, 400);
+}
+
+async function persistUsageNow() {
+  memory.usageSafe = Object.assign({}, memory.usageSafe, {
+    updatedAt: Date.now(),
+  });
+  await chrome.storage.local.set({
+    usageDays: memory.usageDays,
+    usageSafe: memory.usageSafe,
+  });
+}
+
+function recordUsage(watchedIds, blockedIds) {
+  usageChain = usageChain.then(async () => {
+    await stateReady;
+    const day = KPixel.localDayKey();
+    const watchedBefore = KPixel.countUsageBucket(
+      memory.usageDays[day],
+      "watched"
+    );
+    const blockedBefore = KPixel.countUsageBucket(
+      memory.usageDays[day],
+      "blocked"
+    );
+    KPixel.addUsageIds(memory.usageDays, day, "watched", watchedIds || []);
+    KPixel.addUsageIds(memory.usageDays, day, "blocked", blockedIds || []);
+    const addedWatched =
+      KPixel.countUsageBucket(memory.usageDays[day], "watched") - watchedBefore;
+    const addedBlocked =
+      KPixel.countUsageBucket(memory.usageDays[day], "blocked") - blockedBefore;
+    memory.usageSafe = KPixel.bumpUsageSafe(
+      memory.usageSafe,
+      day,
+      addedWatched,
+      addedBlocked
+    );
+    memory.usageSafe = KPixel.mergeUsageSafe(usageView(), memory.usageSafe);
+    await persistUsageNow();
+    return usageView();
+  });
+  return usageChain;
 }
 
 function readFresh(channelId) {
@@ -122,6 +185,18 @@ async function lookupMany(channelIds) {
 }
 
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+  handleMessage(message)
+    .then((result) => {
+      if (result !== undefined) sendResponse(result);
+    })
+    .catch(() => {
+      sendResponse({ error: true });
+    });
+  return true;
+});
+
+async function handleMessage(message) {
+  await stateReady;
   const type = message && message.type;
   if (type === "GET_FLAGS") {
     const flags = {};
@@ -129,89 +204,64 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       if (row && row.flag) flags[id] = row.flag;
     }
     for (const id of memory.forceT) flags[id] = "t";
-    sendResponse({ flags, enabled: memory.enabled });
-    return false;
+    return { flags, enabled: memory.enabled };
   }
   if (type === "SET_FORCE_T") {
     memory.forceT = [...new Set((message.ids || []).filter(KPixel.isUcId))];
-    chrome.storage.local.set({ forceT: memory.forceT });
-    sendResponse({ forceT: memory.forceT });
-    return false;
+    await chrome.storage.local.set({ forceT: memory.forceT });
+    return { forceT: memory.forceT };
   }
   if (type === "GET_STATE") {
-    sendResponse({
+    return {
       enabled: memory.enabled,
       stats: memory.stats,
       cacheSize: Object.keys(memory.cache).length,
       flagged: Object.values(memory.cache).filter((r) => r.flag === "t").length,
-      usage: KPixel.summarizeUsage(
-        memory.usageDays,
-        KPixel.localDayKey()
-      ),
-    });
-    return false;
+      usage: usageView(),
+    };
   }
   if (type === "SET_ENABLED") {
     memory.enabled = !!message.enabled;
     schedulePersist();
-    chrome.storage.local.set({ enabled: memory.enabled });
-    sendResponse({ enabled: memory.enabled });
-    return false;
+    await chrome.storage.local.set({ enabled: memory.enabled });
+    return { enabled: memory.enabled };
   }
   if (type === "CLEAR_CACHE") {
     memory.cache = {};
     memory.forceT = [];
     memory.stats = { lookups: 0, hidden: 0, flagged: 0 };
-    schedulePersist();
-    chrome.storage.local.set({ cache: {}, forceT: [], stats: memory.stats });
-    sendResponse({ ok: true });
-    return false;
+    await chrome.storage.local.set({
+      cache: {},
+      forceT: [],
+      stats: memory.stats,
+    });
+    return { ok: true, usage: usageView() };
   }
   if (type === "REPORT_HIDDEN") {
     memory.stats.hidden = Number(message.count) || 0;
     schedulePersist();
-    sendResponse({ ok: true });
-    return false;
+    return { ok: true };
   }
   if (type === "RECORD_USAGE") {
-    const day = KPixel.localDayKey();
-    KPixel.addUsageIds(
-      memory.usageDays,
-      day,
-      "watched",
-      message.watchedIds || []
-    );
-    KPixel.addUsageIds(
-      memory.usageDays,
-      day,
-      "blocked",
+    const usage = await recordUsage(
+      message.watchedIds || [],
       message.blockedIds || []
     );
-    schedulePersist();
-    sendResponse({
-      ok: true,
-      usage: KPixel.summarizeUsage(memory.usageDays, day),
-    });
-    return false;
+    return { ok: true, usage };
   }
   if (type === "LOOKUP") {
-    lookupMany(message.channelIds || []).then((results) => {
-      sendResponse({ results, enabled: memory.enabled });
-    });
-    return true;
+    const results = await lookupMany(message.channelIds || []);
+    return { results, enabled: memory.enabled };
   }
   if (type === "LOOKUP_ONE") {
-    lookupOne(message.channelId).then((flag) => {
-      sendResponse({ flag, enabled: memory.enabled });
-    });
-    return true;
+    const flag = await lookupOne(message.channelId);
+    return { flag, enabled: memory.enabled };
   }
-  return false;
-});
-
-loadState();
+  return undefined;
+}
 
 self.kpixelSetForceT = async (ids) => {
+  await stateReady;
   memory.forceT = [...new Set((ids || []).filter(KPixel.isUcId))];
   await chrome.storage.local.set({ forceT: memory.forceT });
   return memory.forceT;

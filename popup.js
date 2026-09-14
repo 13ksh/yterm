@@ -77,7 +77,8 @@ $("enabled").addEventListener("change", async (e) => {
 
 $("clearCache").addEventListener("click", async () => {
   await send({ type: "CLEAR_CACHE" });
-  $("lookupResult").textContent = "캐시를 비웠습니다. 다음 조회부터 다시 확인합니다.";
+  $("lookupResult").textContent =
+    "채널 캐시만 비웠습니다. 시청·차단 총합은 그대로 둡니다.";
   $("lookupResult").className = "result";
   refresh();
 });
@@ -116,21 +117,26 @@ async function runLookup() {
 function renderUsage(usage) {
   const todayWatched = (usage && usage.todayWatched) || 0;
   const todayBlocked = (usage && usage.todayBlocked) || 0;
+  const totalWatched = (usage && usage.totalWatched) || 0;
+  const totalBlocked = (usage && usage.totalBlocked) || 0;
   $("todayWatched").textContent = KPixel.formatUsageNumber(todayWatched);
   $("todayBlocked").textContent = KPixel.formatUsageNumber(todayBlocked);
-  if (!usage || !usage.days) {
+  $("totalWatched").textContent = KPixel.formatUsageNumber(totalWatched);
+  $("totalBlocked").textContent = KPixel.formatUsageNumber(totalBlocked);
+  if (!totalWatched && !totalBlocked) {
     $("usageAvg").textContent =
-      "유튜브를 보면 하루 평균 시청·차단이 여기에 쌓입니다.";
+      "유튜브를 보면 본 영상과 차단한 영상 총합이 여기에 쌓입니다. 기기에 따로 저장됩니다.";
     return;
   }
+  const days = (usage && usage.days) || 1;
   $("usageAvg").textContent =
-    "하루 평균 본 영상 " +
-    KPixel.formatUsageNumber(usage.avgWatched) +
-    "개 · 차단 " +
-    KPixel.formatUsageNumber(usage.avgBlocked) +
-    "개 · " +
-    usage.days +
-    "일";
+    "총 " +
+    KPixel.formatUsageNumber(totalWatched) +
+    "개 시청 · 총 " +
+    KPixel.formatUsageNumber(totalBlocked) +
+    "개 차단 · " +
+    days +
+    "일 저장. 캐시를 비워도 이 숫자는 남습니다.";
 }
 
 refresh();
