@@ -1,7 +1,7 @@
 /**
  * Shared helpers for the KPixel YouTube filter.
  */
-(function (root) {
+var KPixel = (function () {
   const UC_RE = /^UC[\w-]{22}$/;
   const UC_IN_TEXT_RE = /UC[\w-]{22}/g;
   const CHANNEL_HREF_RE = /(?:youtube\.com)?\/channel\/(UC[\w-]{22})/i;
@@ -354,6 +354,60 @@
     return u.includes("/youtubei/v1/");
   }
 
+  function indexYoutubeMedia(node, out, depth) {
+    if (!out) out = { videos: {}, comments: {} };
+    if (!node || depth > 22) return out;
+    if (Array.isArray(node)) {
+      for (const item of node) indexYoutubeMedia(item, out, depth + 1);
+      return out;
+    }
+    if (typeof node !== "object") return out;
+
+    const videoObj =
+      node.videoRenderer ||
+      node.compactVideoRenderer ||
+      node.gridVideoRenderer ||
+      node.reelItemRenderer ||
+      node.playlistVideoRenderer;
+    if (videoObj && videoObj.videoId) {
+      const ch = extractChannelIdFromData(videoObj) || extractChannelIdFromData(node);
+      if (ch) out.videos[videoObj.videoId] = ch;
+    }
+
+    if (node.lockupViewModel) {
+      const ch = extractChannelIdFromData(node.lockupViewModel);
+      const vid =
+        extractVideoId(JSON.stringify(node.lockupViewModel).slice(0, 8000)) ||
+        node.lockupViewModel.contentId;
+      if (ch && vid) out.videos[vid] = ch;
+    }
+
+    if (node.shortsLockupViewModel) {
+      const ch = extractChannelIdFromData(node.shortsLockupViewModel);
+      const vid = extractVideoId(
+        JSON.stringify(node.shortsLockupViewModel).slice(0, 8000)
+      );
+      if (ch && vid) out.videos[vid] = ch;
+    }
+
+    const commentObj =
+      node.commentRenderer ||
+      node.commentViewModel ||
+      (node.commentThreadRenderer &&
+        node.commentThreadRenderer.comment &&
+        node.commentThreadRenderer.comment.commentRenderer);
+    if (commentObj) {
+      const ch = extractChannelIdFromData(commentObj) || extractChannelIdFromData(node);
+      const cid = commentObj.commentId || commentObj.id;
+      if (ch && cid) out.comments[cid] = ch;
+    }
+
+    for (const value of Object.values(node)) {
+      indexYoutubeMedia(value, out, depth + 1);
+    }
+    return out;
+  }
+
   function collectTextUcIds(text) {
     if (!text) return [];
     const out = [];
@@ -390,10 +444,11 @@
     collectChannelIdsFromPayload,
     shouldInterceptYoutubeiUrl,
     shouldDropPayloadItem,
+    indexYoutubeMedia,
   };
 
-  root.KPixel = api;
-  if (typeof module !== "undefined" && module.exports) {
-    module.exports = api;
-  }
-})(typeof globalThis !== "undefined" ? globalThis : this);
+  return api;
+})();
+if (typeof module !== "undefined" && module.exports) {
+  module.exports = KPixel;
+}

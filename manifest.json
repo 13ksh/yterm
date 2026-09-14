@@ -46,7 +46,7 @@
         "https://m.youtube.com/*",
         "https://youtube.com/*"
       ],
-      "js": ["shared.js", "content.js"],
+      "js": ["content.js"],
       "css": ["hide.css"],
       "run_at": "document_start"
     }
