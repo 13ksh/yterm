@@ -74,6 +74,81 @@
     });
   }
 
+  function shouldForceOneSecond(url, body) {
+    if (!enabled || pageKind() !== "shorts") return false;
+    const vid =
+      KPixel.extractWatchtimeVideoId(url, body) ||
+      KPixel.extractVideoId(location.pathname);
+    if (!vid) return false;
+    const ch = videoMap[vid];
+    return !!(ch && flags[ch] === "t");
+  }
+
+  function rewriteOutgoing(url, body) {
+    if (!shouldForceOneSecond(url, body)) {
+      return { url: url, body: body };
+    }
+    return KPixel.rewriteWatchtimeRequest(url, body == null ? "" : body);
+  }
+
+  function stringifyBody(body) {
+    if (body == null) return "";
+    if (typeof body === "string") return body;
+    if (typeof URLSearchParams !== "undefined" && body instanceof URLSearchParams) {
+      return body.toString();
+    }
+    return "";
+  }
+
+  let skipTimer = 0;
+  let skipVid = null;
+
+  function goNextShort() {
+    const btn =
+      document.querySelector("#navigation-button-down button") ||
+      document.querySelector("ytd-shorts #navigation-button-down button") ||
+      document.querySelector('button[aria-label="Next video"]') ||
+      document.querySelector('button[aria-label="다음 동영상"]') ||
+      document.querySelector('button[aria-label="다음"]');
+    if (btn) {
+      btn.click();
+      return;
+    }
+    window.dispatchEvent(
+      new KeyboardEvent("keydown", {
+        key: "ArrowDown",
+        code: "ArrowDown",
+        keyCode: 40,
+        which: 40,
+        bubbles: true,
+      })
+    );
+  }
+
+  function tickShortsOneSecond() {
+    if (!enabled || pageKind() !== "shorts") {
+      skipVid = null;
+      clearTimeout(skipTimer);
+      return;
+    }
+    const vid = KPixel.extractVideoId(location.pathname);
+    if (!vid) return;
+    const ch = videoMap[vid];
+    if (!ch || flags[ch] !== "t") {
+      if (skipVid !== vid) {
+        clearTimeout(skipTimer);
+        skipVid = null;
+      }
+      return;
+    }
+    if (skipVid === vid) return;
+    skipVid = vid;
+    clearTimeout(skipTimer);
+    skipTimer = setTimeout(() => {
+      if (KPixel.extractVideoId(location.pathname) === vid) goNextShort();
+    }, 1000);
+  }
+
   function ingest(data) {
     if (!data) return;
     const indexed = KPixel.indexYoutubeMedia(data, null, 0);
@@ -170,37 +245,100 @@
   function applyAll() {
     if (window.ytInitialData) ingest(window.ytInitialData);
     applyDomHides();
+    tickShortsOneSecond();
   }
 
   const origFetch = window.fetch;
   window.fetch = function (input, init) {
-    const url = typeof input === "string" ? input : input && input.url;
-    if (!enabled || !KPixel.shouldInterceptYoutubeiUrl(url) || pageKind() === "search") {
-      return origFetch.apply(this, arguments);
-    }
-    return origFetch.apply(this, arguments).then(async (res) => {
+    const run = async () => {
+      let nextInput = input;
+      let nextInit = init;
       try {
-        const text = await res.clone().text();
-        const next = await filterText(text);
-        if (next === text) return res;
-        return new Response(next, {
-          status: res.status,
-          statusText: res.statusText,
-          headers: res.headers,
-        });
+        const req = input instanceof Request ? input : null;
+        let url = req ? req.url : String(input);
+        let body = init && init.body;
+        if (
+          req &&
+          (body === undefined || body === null) &&
+          req.method !== "GET" &&
+          req.method !== "HEAD"
+        ) {
+          try {
+            body = await req.clone().text();
+          } catch {
+            body = "";
+          }
+        }
+        const bodyStr = stringifyBody(body);
+        if (shouldForceOneSecond(url, bodyStr)) {
+          const rewritten = rewriteOutgoing(url, bodyStr);
+          if (req && (!init || init.body == null)) {
+            nextInput = rewritten.url;
+            nextInit = {
+              method: req.method,
+              headers: req.headers,
+              body:
+                req.method === "GET" || req.method === "HEAD"
+                  ? undefined
+                  : rewritten.body,
+              credentials: req.credentials,
+              cache: req.cache,
+              mode: req.mode,
+              redirect: req.redirect,
+              referrer: req.referrer,
+            };
+          } else {
+            nextInput = rewritten.url;
+            nextInit = Object.assign({}, init || {}, {
+              body:
+                init && init.body != null ? rewritten.body : init && init.body,
+            });
+          }
+          url = rewritten.url;
+        }
+        const res = await origFetch.call(window, nextInput, nextInit);
+        if (
+          !enabled ||
+          !KPixel.shouldInterceptYoutubeiUrl(url) ||
+          pageKind() === "search"
+        ) {
+          return res;
+        }
+        try {
+          const text = await res.clone().text();
+          const next = await filterText(text);
+          if (next === text) return res;
+          return new Response(next, {
+            status: res.status,
+            statusText: res.statusText,
+            headers: res.headers,
+          });
+        } catch {
+          return res;
+        }
       } catch {
-        return res;
+        return origFetch.apply(window, arguments);
       }
-    });
+    };
+    return run();
   };
 
   const xhrOpen = XMLHttpRequest.prototype.open;
   const xhrSend = XMLHttpRequest.prototype.send;
-  XMLHttpRequest.prototype.open = function (method, url) {
-    this.__kpixelUrl = url;
-    return xhrOpen.apply(this, arguments);
+  XMLHttpRequest.prototype.open = function (method, url, ...rest) {
+    let nextUrl = url;
+    if (shouldForceOneSecond(url, "")) {
+      nextUrl = rewriteOutgoing(url, "").url;
+    }
+    this.__kpixelUrl = nextUrl;
+    return xhrOpen.call(this, method, nextUrl, ...rest);
   };
-  XMLHttpRequest.prototype.send = function () {
+  XMLHttpRequest.prototype.send = function (body) {
+    let nextBody = body;
+    const bodyStr = stringifyBody(body);
+    if (shouldForceOneSecond(this.__kpixelUrl, bodyStr) && bodyStr) {
+      nextBody = rewriteOutgoing(this.__kpixelUrl, bodyStr).body;
+    }
     if (
       enabled &&
       KPixel.shouldInterceptYoutubeiUrl(this.__kpixelUrl) &&
@@ -233,7 +371,60 @@
         true
       );
     }
-    return xhrSend.apply(this, arguments);
+    return xhrSend.call(this, nextBody);
+  };
+
+  const origBeacon = navigator.sendBeacon.bind(navigator);
+  navigator.sendBeacon = function (url, data) {
+    try {
+      if (data == null || typeof data === "string") {
+        const next = rewriteOutgoing(url, data || "");
+        return origBeacon(next.url, next.body || undefined);
+      }
+      if (typeof URLSearchParams !== "undefined" && data instanceof URLSearchParams) {
+        const next = rewriteOutgoing(url, data.toString());
+        return origBeacon(next.url, next.body);
+      }
+      if (typeof Blob !== "undefined" && data instanceof Blob) {
+        data.text().then((text) => {
+          const next = rewriteOutgoing(url, text);
+          origBeacon(next.url, new Blob([next.body], { type: data.type }));
+        });
+        return true;
+      }
+    } catch {
+      /* fall through */
+    }
+    return origBeacon(url, data);
+  };
+
+  function rewriteMaybeSrc(value) {
+    const url = String(value || "");
+    if (!shouldForceOneSecond(url, "")) return value;
+    return rewriteOutgoing(url, "").url;
+  }
+
+  const imgSrc = Object.getOwnPropertyDescriptor(HTMLImageElement.prototype, "src");
+  if (imgSrc && imgSrc.set) {
+    Object.defineProperty(HTMLImageElement.prototype, "src", {
+      configurable: true,
+      enumerable: imgSrc.enumerable,
+      get: imgSrc.get,
+      set(value) {
+        imgSrc.set.call(this, rewriteMaybeSrc(value));
+      },
+    });
+  }
+
+  const origSetAttribute = Element.prototype.setAttribute;
+  Element.prototype.setAttribute = function (name, value) {
+    if (
+      this instanceof HTMLImageElement &&
+      String(name).toLowerCase() === "src"
+    ) {
+      value = rewriteMaybeSrc(value);
+    }
+    return origSetAttribute.call(this, name, value);
   };
 
   function trapInitialData(name) {
@@ -260,6 +451,7 @@
 
   const observer = new MutationObserver(() => {
     applyDomHides();
+    tickShortsOneSecond();
   });
   observer.observe(document.documentElement, { childList: true, subtree: true });
   window.addEventListener("yt-navigate-finish", applyAll);

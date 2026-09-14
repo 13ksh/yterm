@@ -5,7 +5,7 @@ const kindLabel = {
   home: "홈 피드 · 필터 적용",
   feed: "피드 · 필터 적용",
   watch: "시청 · 댓글/추천 필터",
-  shorts: "쇼츠 피드 · 필터 적용",
+  shorts: "쇼츠 피드 · t 채널 1초 시청",
   post: "게시물 · 필터 적용",
   channel: "채널 페이지 · 댓글만 필터",
   other: "기타 페이지",
@@ -48,7 +48,9 @@ async function refresh() {
   $("statusText").textContent = state.enabled
     ? kind === "search"
       ? "이 탭은 검색이라 결과를 그대로 둡니다."
-      : "t 채널 항목을 이 페이지에서 숨기고 있습니다."
+      : kind === "shorts"
+        ? "t 채널 쇼츠는 1초 시청으로 남기고 다음으로 넘깁니다."
+        : "t 채널 항목을 이 페이지에서 숨기고 있습니다."
     : "필터가 꺼져 있습니다.";
 
   try {

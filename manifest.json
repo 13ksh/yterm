@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "KPixel 채널 필터",
   "short_name": "KPixel",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "del.kpixel.net에서 t인 채널을 유튜브 댓글·게시물·쇼츠·동영상 피드에서 숨깁니다. 검색 결과는 그대로 둡니다.",
   "icons": {
     "16": "icons/icon16.png",
@@ -24,7 +24,8 @@
     "https://del.kpixel.net/*",
     "https://www.youtube.com/*",
     "https://m.youtube.com/*",
-    "https://youtube.com/*"
+    "https://youtube.com/*",
+    "https://s.youtube.com/*"
   ],
   "background": {
     "service_worker": "background.js"
