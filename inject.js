@@ -5,6 +5,12 @@
   const flags = Object.create(null);
   const videoMap = Object.create(null);
   const commentMap = Object.create(null);
+  const tWatchByVideo = Object.create(null);
+  const hiddenT = Object.create(null);
+  const seekedNeighbor = Object.create(null);
+  let lastWatchtimeTemplate = null;
+  let pendingNextTrim = 0;
+  let neighborTrimVid = null;
   let enabled = true;
   let seq = 0;
   const waiters = new Map();
@@ -139,6 +145,59 @@
     scrapeActiveShortChannel();
   }
 
+  const origSendBeacon = navigator.sendBeacon.bind(navigator);
+
+  function tWatchSeconds(vid) {
+    if (!vid) return KPixel.sineWatchSeconds();
+    if (tWatchByVideo[vid] == null) {
+      tWatchByVideo[vid] = KPixel.sineWatchSeconds();
+    }
+    return tWatchByVideo[vid];
+  }
+
+  function rememberWatchtimeTemplate(url, body) {
+    if (!KPixel.isWatchtimeUrl(url)) return;
+    lastWatchtimeTemplate = { url: String(url), body: stringifyBody(body) };
+  }
+
+  function fireHiddenTWatch(vid) {
+    const row = hiddenT[vid];
+    if (!row || row.pinged) return;
+    if (!lastWatchtimeTemplate) return;
+    row.pinged = true;
+    const stamped = KPixel.stampWatchtimeVideo(
+      lastWatchtimeTemplate.url,
+      lastWatchtimeTemplate.body || "",
+      vid,
+      row.seconds
+    );
+    try {
+      origSendBeacon(stamped.url, stamped.body || undefined);
+    } catch {
+      /* ignore */
+    }
+  }
+
+  function queueHiddenT(vid) {
+    if (!vid || hiddenT[vid]) return;
+    hiddenT[vid] = { seconds: tWatchSeconds(vid), pinged: false };
+    pendingNextTrim = KPixel.NEIGHBOR_TRIM_MAX;
+    neighborTrimVid = null;
+    setTimeout(() => fireHiddenTWatch(vid), 400);
+  }
+
+  function neighborTrimFor(url, body) {
+    if (!(pendingNextTrim > 0)) return 0;
+    const vid =
+      KPixel.extractWatchtimeVideoId(url, body) ||
+      KPixel.extractVideoId(location.pathname);
+    const ch = vid && videoMap[vid];
+    if (!vid || !ch || flags[ch] === "t") return 0;
+    if (!neighborTrimVid) neighborTrimVid = vid;
+    if (vid !== neighborTrimVid) return 0;
+    return pendingNextTrim;
+  }
+
   function shouldForceOneSecond(url, body) {
     return KPixel.shouldRewriteShortsWatchtime(
       pageKind(),
@@ -152,10 +211,17 @@
   }
 
   function rewriteOutgoing(url, body) {
-    if (!shouldForceOneSecond(url, body)) {
-      return { url: url, body: body };
+    const bodyStr = stringifyBody(body);
+    if (shouldForceOneSecond(url, bodyStr)) {
+      const vid =
+        KPixel.extractWatchtimeVideoId(url, bodyStr) ||
+        KPixel.extractVideoId(location.pathname);
+      if (vid && hiddenT[vid]) hiddenT[vid].pinged = true;
+      return KPixel.rewriteWatchtimeRequest(url, bodyStr, tWatchSeconds(vid));
     }
-    return KPixel.rewriteWatchtimeRequest(url, body == null ? "" : body);
+    const trim = neighborTrimFor(url, bodyStr);
+    if (trim > 0) return KPixel.trimWatchtimeRequest(url, bodyStr, trim);
+    return { url: url, body: body };
   }
 
   function shortsWatchtimeNeedsWait(url, body) {
@@ -175,6 +241,7 @@
     if (!enabled || pageKind() !== "shorts" || !KPixel.isWatchtimeUrl(url)) {
       return { url: url, body: body };
     }
+    rememberWatchtimeTemplate(url, bodyStr);
     refreshMediaMaps();
     const vid =
       KPixel.extractWatchtimeVideoId(url, bodyStr) ||
@@ -192,8 +259,12 @@
         location.pathname
       )
     ) {
-      return KPixel.rewriteWatchtimeRequest(url, bodyStr);
+      if (vid && hiddenT[vid]) hiddenT[vid].pinged = true;
+      queueHiddenT(vid);
+      return KPixel.rewriteWatchtimeRequest(url, bodyStr, tWatchSeconds(vid));
     }
+    const trim = neighborTrimFor(url, bodyStr);
+    if (trim > 0) return KPixel.trimWatchtimeRequest(url, bodyStr, trim);
     return { url: url, body: body };
   }
 
@@ -223,6 +294,58 @@
     );
   }
 
+  function cloakCurrentShort() {
+    const active = document.querySelector(
+      "ytd-reel-video-renderer[is-active], ytd-reel-video-renderer[active], ytm-reel-item-renderer[is-active]"
+    );
+    if (active) active.setAttribute(ATTR, "1");
+    document
+      .querySelectorAll(
+        "ytd-reel-video-renderer[is-active] video, ytd-reel-video-renderer[active] video, #shorts-player video, #movie_player video"
+      )
+      .forEach((video) => {
+        try {
+          video.muted = true;
+          video.pause();
+          video.style.opacity = "0";
+        } catch {
+          /* ignore */
+        }
+      });
+  }
+
+  function findActiveShortVideo() {
+    return (
+      document.querySelector(
+        "ytd-reel-video-renderer[is-active] video, ytd-reel-video-renderer[active] video, #shorts-player video, .html5-video-player video"
+      ) || null
+    );
+  }
+
+  function seekActiveShort(seconds) {
+    if (!(seconds > 0)) return;
+    const video = findActiveShortVideo();
+    if (!video) return false;
+    try {
+      if (video.currentTime > 0.35) return true;
+      const dur = Number(video.duration);
+      const cap =
+        Number.isFinite(dur) && dur > 0 ? Math.max(0, dur - 0.05) : seconds;
+      video.currentTime = Math.min(seconds, cap);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  function trySeekNeighbor(vid, seconds, attempts) {
+    if (KPixel.extractVideoId(location.pathname) !== vid) return;
+    if (seekActiveShort(seconds)) return;
+    if (attempts > 0) {
+      setTimeout(() => trySeekNeighbor(vid, seconds, attempts - 1), 50);
+    }
+  }
+
   function tickShortsOneSecond() {
     if (!enabled || pageKind() !== "shorts") {
       skipVid = null;
@@ -245,18 +368,33 @@
       return;
     }
     if (flags[ch] !== "t") {
+      if (pendingNextTrim > 0) {
+        if (!neighborTrimVid) neighborTrimVid = vid;
+        if (neighborTrimVid === vid && !seekedNeighbor[vid]) {
+          seekedNeighbor[vid] = true;
+          trySeekNeighbor(vid, pendingNextTrim, 16);
+        } else if (neighborTrimVid !== vid) {
+          pendingNextTrim = 0;
+          neighborTrimVid = null;
+        }
+      }
       if (skipVid !== vid) {
         clearTimeout(skipTimer);
         skipVid = null;
       }
+      if (lastWatchtimeTemplate) {
+        Object.keys(hiddenT).forEach((id) => fireHiddenTWatch(id));
+      }
       return;
     }
+    queueHiddenT(vid);
+    cloakCurrentShort();
     if (skipVid === vid) return;
     skipVid = vid;
     clearTimeout(skipTimer);
     skipTimer = setTimeout(() => {
       if (KPixel.extractVideoId(location.pathname) === vid) goNextShort();
-    }, 1000);
+    }, 0);
   }
 
   async function filterText(text, filterPayload) {
@@ -275,7 +413,11 @@
     );
     await lookup(ids);
     if (filterPayload && kind !== "search") {
-      KPixel.filterYoutubePayload(data, flags, kind);
+      const dropped = {};
+      KPixel.filterYoutubePayload(data, flags, kind, dropped);
+      if (kind === "shorts") {
+        Object.keys(dropped).forEach((id) => queueHiddenT(id));
+      }
       return JSON.stringify(data);
     }
     return text;
@@ -290,7 +432,11 @@
         KPixel.collectChannelIdsFromPayload(data).concat(Object.values(videoMap))
       );
       if (filterPayload !== false) {
-        KPixel.filterYoutubePayload(data, flags, pageKind());
+        const dropped = {};
+        KPixel.filterYoutubePayload(data, flags, pageKind(), dropped);
+        if (pageKind() === "shorts") {
+          Object.keys(dropped).forEach((id) => queueHiddenT(id));
+        }
       }
     } catch {
       /* keep original */
@@ -458,7 +604,7 @@
       return;
     }
     let nextUrl = url;
-    if (shouldForceOneSecond(url, "")) {
+    if (KPixel.isWatchtimeUrl(url) && pageKind() === "shorts") {
       nextUrl = rewriteOutgoing(url, "").url;
     }
     this.__kpixelUrl = nextUrl;
@@ -499,8 +645,9 @@
     const url = this.__kpixelUrl;
     const sendNow = (nextBody) => xhrSend.call(this, nextBody);
     let nextBody = body;
-    if (shouldForceOneSecond(url, bodyStr) && bodyStr) {
-      nextBody = rewriteOutgoing(url, bodyStr).body;
+    if (KPixel.isWatchtimeUrl(url) && pageKind() === "shorts") {
+      const rewritten = rewriteOutgoing(url, bodyStr);
+      nextBody = typeof rewritten.body === "string" && rewritten.body ? rewritten.body : body;
     }
     if (
       enabled &&
@@ -523,7 +670,11 @@
               )
             );
             if (!filterIt) return;
-            KPixel.filterYoutubePayload(data, flags, pageKind());
+            const dropped = {};
+            KPixel.filterYoutubePayload(data, flags, pageKind(), dropped);
+            if (pageKind() === "shorts") {
+              Object.keys(dropped).forEach((id) => queueHiddenT(id));
+            }
             const next = JSON.stringify(data);
             Object.defineProperty(this, "responseText", {
               configurable: true,
@@ -543,30 +694,29 @@
     return sendNow(nextBody);
   };
 
-  const origBeacon = navigator.sendBeacon.bind(navigator);
   navigator.sendBeacon = function (url, data) {
     try {
       if (enabled && pageKind() === "shorts" && KPixel.isWatchtimeUrl(url)) {
         const deliver = (next, original) => {
           if (original == null || typeof original === "string") {
-            return origBeacon(next.url, next.body || undefined);
+            return origSendBeacon(next.url, next.body || undefined);
           }
           if (
             typeof URLSearchParams !== "undefined" &&
             original instanceof URLSearchParams
           ) {
-            return origBeacon(next.url, next.body);
+            return origSendBeacon(next.url, next.body);
           }
           if (typeof Blob !== "undefined" && original instanceof Blob) {
-            origBeacon(next.url, new Blob([next.body || ""], { type: original.type }));
+            origSendBeacon(next.url, new Blob([next.body || ""], { type: original.type }));
             return true;
           }
-          return origBeacon(next.url, original);
+          return origSendBeacon(next.url, original);
         };
         if (data == null || typeof data === "string") {
           if (!shortsWatchtimeNeedsWait(url, data || "")) {
             const next = rewriteOutgoing(url, data || "");
-            return origBeacon(next.url, next.body || undefined);
+            return origSendBeacon(next.url, next.body || undefined);
           }
           prepareWatchtime(url, data || "").then((next) => deliver(next, data));
           return true;
@@ -574,7 +724,7 @@
         if (typeof URLSearchParams !== "undefined" && data instanceof URLSearchParams) {
           if (!shortsWatchtimeNeedsWait(url, data.toString())) {
             const next = rewriteOutgoing(url, data.toString());
-            return origBeacon(next.url, next.body);
+            return origSendBeacon(next.url, next.body);
           }
           prepareWatchtime(url, data.toString()).then((next) => deliver(next, data));
           return true;
@@ -589,12 +739,12 @@
     } catch {
       /* fall through */
     }
-    return origBeacon(url, data);
+    return origSendBeacon(url, data);
   };
 
   function rewriteMaybeSrc(value) {
     const url = String(value || "");
-    if (!shouldForceOneSecond(url, "")) return value;
+    if (!KPixel.isWatchtimeUrl(url)) return value;
     return rewriteOutgoing(url, "").url;
   }
 

@@ -111,7 +111,7 @@ test("shouldIngestYoutubeiUrl keeps player and reel maps without filtering them"
   );
 });
 
-test("shorts page keeps t reel items so watchtime can be rewritten", () => {
+test("shorts page drops t reel items so people never see them", () => {
   const tId = "UCmmlHsRZzocU9UrXM2mcsng";
   const data = {
     contents: [
@@ -126,8 +126,8 @@ test("shorts page keeps t reel items so watchtime can be rewritten", () => {
       },
     ],
   };
-  KPixel.filterYoutubePayload(data, { [tId]: "t" }, "shorts");
-  assert.equal(data.contents.length, 1);
-  KPixel.filterYoutubePayload(data, { [tId]: "t" }, "home");
+  const dropped = {};
+  KPixel.filterYoutubePayload(data, { [tId]: "t" }, "shorts", dropped);
   assert.equal(data.contents.length, 0);
+  assert.equal(dropped.OB1uQrVzO9I, tId);
 });

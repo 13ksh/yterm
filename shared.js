@@ -100,13 +100,12 @@ var KPixel = (function () {
   /**
    * Search results stay visible. Channel pages stay visible except comments
    * from flagged authors. Everywhere else, hide flagged videos / shorts / posts / comments.
+   * Immersive /shorts/ also hides t clips from the person; inject.js still reports
+   * a sine-weighted 0.8–1.6s watch and trims up to 0.2s from the next clip.
    */
   function shouldFilterSurface(pageKind, surface) {
     if (pageKind === "search") return false;
     if (pageKind === "channel") return surface === "comment";
-    // Immersive /shorts/ feed: t clips still play so watchtime can fire, then
-    // inject.js reports exactly 1s and advances. Home/feed shelves still hide.
-    if (pageKind === "shorts" && surface === "shorts") return false;
     return (
       surface === "video" ||
       surface === "shorts" ||
@@ -298,29 +297,32 @@ var KPixel = (function () {
     return contents.length === 0;
   }
 
-  function filterYoutubePayload(data, flags, pageKind) {
+  function filterYoutubePayload(data, flags, pageKind, droppedVideos) {
     if (!data || typeof data !== "object" || !flags) return data;
     if (pageKind === "search") return data;
-    walkFilter(data, flags, pageKind);
+    walkFilter(data, flags, pageKind, droppedVideos);
     return data;
   }
 
-  function walkFilter(node, flags, pageKind) {
+  function walkFilter(node, flags, pageKind, droppedVideos) {
     if (!node || typeof node !== "object") return;
     if (Array.isArray(node)) {
       for (let i = node.length - 1; i >= 0; i--) {
         const el = node[i];
         if (shouldDropPayloadItem(el, flags, pageKind)) {
+          if (droppedVideos) {
+            Object.assign(droppedVideos, indexYoutubeMedia(el, null, 0).videos);
+          }
           node.splice(i, 1);
           continue;
         }
-        walkFilter(el, flags, pageKind);
+        walkFilter(el, flags, pageKind, droppedVideos);
         if (isEmptyShelf(el)) node.splice(i, 1);
       }
       return;
     }
     for (const value of Object.values(node)) {
-      walkFilter(value, flags, pageKind);
+      walkFilter(value, flags, pageKind, droppedVideos);
     }
   }
 
@@ -382,37 +384,105 @@ var KPixel = (function () {
     return m ? m[1] : extractVideoId(blob);
   }
 
-  function forceOneSecondWatchParams(sp) {
+  const T_SHORT_WATCH_MIN = 0.8;
+  const T_SHORT_WATCH_MAX = 1.6;
+  const NEIGHBOR_TRIM_MAX = 0.2;
+
+  function formatWatchSeconds(n) {
+    const x = Math.max(0, Number(n));
+    if (!Number.isFinite(x)) return "1.000";
+    return x.toFixed(3);
+  }
+
+  /**
+   * Inverse-CDF of a sine bump on [0, 1]: densest at 0.5.
+   * Maps onto [min, max] so 0.8–1.6s clusters around ~1.2s.
+   */
+  function sineUnit(rand) {
+    const roll = typeof rand === "function" ? rand() : Math.random();
+    const v = Math.min(1 - 1e-12, Math.max(1e-12, Number(roll) || 0));
+    return Math.acos(1 - 2 * v) / Math.PI;
+  }
+
+  function sineWatchSeconds(min, max, rand) {
+    const lo = min == null ? T_SHORT_WATCH_MIN : min;
+    const hi = max == null ? T_SHORT_WATCH_MAX : max;
+    return lo + (hi - lo) * sineUnit(rand);
+  }
+
+  function readWatchSeconds(value) {
+    if (value == null || value === "") return null;
+    const str = String(value);
+    const last = str.includes(",") ? str.split(",").pop() : str;
+    const num = last.includes(":") ? last.split(":").pop() : last;
+    const n = parseFloat(num);
+    return Number.isFinite(n) ? n : null;
+  }
+
+  function forceWatchParams(sp, seconds) {
     if (!sp || typeof sp.get !== "function") return sp;
+    const s = formatWatchSeconds(seconds == null ? 1 : seconds);
     const et = sp.get("et");
     const range = et != null && et.includes(":") && !et.includes(",");
     if (range) {
       sp.set("st", "0.000:0.000");
-      sp.set("et", "0.000:1.000");
+      sp.set("et", "0.000:" + s);
     } else {
       if (sp.has("st") || (et != null && et.includes(","))) sp.set("st", "0.000");
-      sp.set("et", "1.000");
+      sp.set("et", s);
     }
-    if (sp.has("cmt")) sp.set("cmt", "1.000");
+    if (sp.has("cmt")) sp.set("cmt", s);
     return sp;
   }
 
-  function forceOneSecondWatchQuery(query) {
+  function forceOneSecondWatchParams(sp) {
+    return forceWatchParams(sp, 1);
+  }
+
+  function trimWatchParams(sp, trim) {
+    if (!sp || typeof sp.get !== "function" || !(trim > 0)) return sp;
+    const et = sp.get("et");
+    const etSec = readWatchSeconds(et);
+    if (etSec != null) {
+      const next = formatWatchSeconds(Math.max(0, etSec - trim));
+      if (et != null && et.includes(":") && !et.includes(",")) {
+        const start = et.split(":")[0];
+        sp.set("et", start + ":" + next);
+      } else {
+        sp.set("et", next);
+      }
+    }
+    if (sp.has("cmt")) {
+      const c = readWatchSeconds(sp.get("cmt"));
+      if (c != null) sp.set("cmt", formatWatchSeconds(Math.max(0, c - trim)));
+    }
+    return sp;
+  }
+
+  function applyWatchParamsToQuery(query, mutate) {
     const prefix = String(query || "").startsWith("?") ? "?" : "";
     const raw = String(query || "").replace(/^\?/, "");
     const sp = new URLSearchParams(raw);
-    forceOneSecondWatchParams(sp);
+    mutate(sp);
     return prefix + sp.toString();
   }
 
-  function rewriteWatchtimeUrl(url) {
+  function forceWatchQuery(query, seconds) {
+    return applyWatchParamsToQuery(query, (sp) => forceWatchParams(sp, seconds));
+  }
+
+  function forceOneSecondWatchQuery(query) {
+    return forceWatchQuery(query, 1);
+  }
+
+  function rewriteWatchtimeUrl(url, seconds) {
     if (!url) return url;
     try {
       const abs = /^https?:/i.test(url);
       const u = abs
         ? new URL(url)
         : new URL(url, "https://www.youtube.com/");
-      forceOneSecondWatchParams(u.searchParams);
+      forceWatchParams(u.searchParams, seconds == null ? 1 : seconds);
       if (abs) return u.toString();
       return u.pathname + u.search + u.hash;
     } catch {
@@ -420,10 +490,34 @@ var KPixel = (function () {
     }
   }
 
-  function rewriteWatchTimeFields(node, depth) {
+  function trimWatchtimeUrl(url, trim) {
+    if (!url || !(trim > 0)) return url;
+    try {
+      const abs = /^https?:/i.test(url);
+      const u = abs
+        ? new URL(url)
+        : new URL(url, "https://www.youtube.com/");
+      trimWatchParams(u.searchParams, trim);
+      if (abs) return u.toString();
+      return u.pathname + u.search + u.hash;
+    } catch {
+      return url;
+    }
+  }
+
+  function setWatchtimeDocId(sp, videoId) {
+    if (!sp || !videoId) return sp;
+    if (sp.has("docid")) sp.set("docid", videoId);
+    else if (sp.has("id")) sp.set("id", videoId);
+    else sp.set("docid", videoId);
+    return sp;
+  }
+
+  function rewriteWatchTimeFields(node, depth, seconds) {
     if (!node || depth > 10) return;
+    const s = seconds == null ? 1 : seconds;
     if (Array.isArray(node)) {
-      for (const item of node) rewriteWatchTimeFields(item, depth + 1);
+      for (const item of node) rewriteWatchTimeFields(item, depth + 1, s);
       return;
     }
     if (typeof node !== "object") return;
@@ -433,32 +527,96 @@ var KPixel = (function () {
           key
         )
       ) {
-        if (typeof value === "number") node[key] = 1;
+        if (typeof value === "number") node[key] = s;
         else if (typeof value === "string" && /^\d+(\.\d+)?$/.test(value)) {
-          node[key] = "1.000";
+          node[key] = formatWatchSeconds(s);
         }
       } else if (value && typeof value === "object") {
-        rewriteWatchTimeFields(value, depth + 1);
+        rewriteWatchTimeFields(value, depth + 1, s);
       }
     }
   }
 
-  function rewriteWatchtimeRequest(url, body) {
+  function mutateWatchtimeRequest(url, body, mutateUrl, mutateBody) {
     let nextUrl = url;
     let nextBody = body;
-    if (isWatchtimeUrl(url)) nextUrl = rewriteWatchtimeUrl(url);
+    if (isWatchtimeUrl(url)) nextUrl = mutateUrl(url);
     if (typeof body === "string" && body) {
       if (/(?:^|&)(et|cmt|docid|st)=/.test(body)) {
-        nextBody = forceOneSecondWatchQuery(body);
+        nextBody = mutateBody(body);
       } else if (body.trim().charAt(0) === "{") {
         try {
           const obj = JSON.parse(body);
-          rewriteWatchTimeFields(obj, 0);
+          mutateBody(obj);
           nextBody = JSON.stringify(obj);
         } catch {
           /* keep */
         }
       }
+    }
+    return { url: nextUrl, body: nextBody };
+  }
+
+  function rewriteWatchtimeRequest(url, body, seconds) {
+    const sec = seconds == null ? 1 : seconds;
+    return mutateWatchtimeRequest(
+      url,
+      body,
+      (u) => rewriteWatchtimeUrl(u, sec),
+      (b) => {
+        if (typeof b === "string") return forceWatchQuery(b, sec);
+        rewriteWatchTimeFields(b, 0, sec);
+        return b;
+      }
+    );
+  }
+
+  function trimWatchtimeRequest(url, body, trim) {
+    if (!(trim > 0)) return { url: url, body: body };
+    return mutateWatchtimeRequest(
+      url,
+      body,
+      (u) => trimWatchtimeUrl(u, trim),
+      (b) => {
+        if (typeof b === "string") {
+          return applyWatchParamsToQuery(b, (sp) => trimWatchParams(sp, trim));
+        }
+        if (b && typeof b === "object") {
+          const et = readWatchSeconds(b.et);
+          if (et != null) b.et = Math.max(0, et - trim);
+          const cmt = readWatchSeconds(b.cmt);
+          if (cmt != null) b.cmt = Math.max(0, cmt - trim);
+        }
+        return b;
+      }
+    );
+  }
+
+  function stampWatchtimeVideo(url, body, videoId, seconds) {
+    const rewritten = rewriteWatchtimeRequest(url, body, seconds);
+    const stamp = (target) => {
+      if (!target) return target;
+      try {
+        const abs = /^https?:/i.test(target);
+        const u = abs
+          ? new URL(target)
+          : new URL(target, "https://www.youtube.com/");
+        setWatchtimeDocId(u.searchParams, videoId);
+        forceWatchParams(u.searchParams, seconds);
+        if (abs) return u.toString();
+        return u.pathname + u.search + u.hash;
+      } catch {
+        return target;
+      }
+    };
+    let nextUrl = rewritten.url;
+    let nextBody = rewritten.body;
+    if (isWatchtimeUrl(nextUrl)) nextUrl = stamp(nextUrl);
+    if (typeof nextBody === "string" && /(?:^|&)(et|cmt|docid|st)=/.test(nextBody)) {
+      nextBody = applyWatchParamsToQuery(nextBody, (sp) => {
+        setWatchtimeDocId(sp, videoId);
+        forceWatchParams(sp, seconds);
+      });
     }
     return { url: nextUrl, body: nextBody };
   }
@@ -639,10 +797,22 @@ var KPixel = (function () {
     shouldRewriteShortsWatchtime,
     isWatchtimeUrl,
     extractWatchtimeVideoId,
+    formatWatchSeconds,
+    sineWatchSeconds,
+    sineUnit,
+    forceWatchParams,
+    forceWatchQuery,
     forceOneSecondWatchParams,
     forceOneSecondWatchQuery,
+    trimWatchParams,
+    trimWatchtimeUrl,
+    trimWatchtimeRequest,
+    stampWatchtimeVideo,
     rewriteWatchtimeUrl,
     rewriteWatchtimeRequest,
+    T_SHORT_WATCH_MIN,
+    T_SHORT_WATCH_MAX,
+    NEIGHBOR_TRIM_MAX,
   };
 
   return api;

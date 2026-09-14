@@ -2,8 +2,8 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const KPixel = require("../shared.js");
 
-test("shorts feed does not hide shorts cards so 1s watch can fire", () => {
-  assert.equal(KPixel.shouldFilterSurface("shorts", "shorts"), false);
+test("shorts feed hides t cards from the person", () => {
+  assert.equal(KPixel.shouldFilterSurface("shorts", "shorts"), true);
   assert.equal(KPixel.shouldFilterSurface("shorts", "comment"), true);
   assert.equal(KPixel.shouldFilterSurface("home", "shorts"), true);
 });
@@ -134,6 +134,53 @@ test("collectChannelIdsFromPayload includes player videoDetails", () => {
     },
   });
   assert.deepEqual(ids, ["UCmmlHsRZzocU9UrXM2mcsng"]);
+});
+
+test("rewriteWatchtimeUrl can target a sine-sampled duration", () => {
+  const url =
+    "https://www.youtube.com/api/stats/watchtime?docid=abcdefghijk&st=0.000&et=8.200&cmt=8.200";
+  const next = KPixel.rewriteWatchtimeUrl(url, 1.234);
+  const sp = new URL(next).searchParams;
+  assert.equal(sp.get("et"), "1.234");
+  assert.equal(sp.get("cmt"), "1.234");
+});
+
+test("sineWatchSeconds peaks at the center of 0.8–1.6", () => {
+  const mid = KPixel.sineWatchSeconds(0.8, 1.6, () => 0.5);
+  assert.ok(Math.abs(mid - 1.2) < 1e-9);
+  const lo = KPixel.sineWatchSeconds(0.8, 1.6, () => 0.02);
+  const hi = KPixel.sineWatchSeconds(0.8, 1.6, () => 0.98);
+  assert.ok(lo > 0.8 && lo < 1.05);
+  assert.ok(hi > 1.35 && hi < 1.6);
+  for (let i = 0; i < 40; i++) {
+    const s = KPixel.sineWatchSeconds(0.8, 1.6, () => (i + 0.5) / 40);
+    assert.ok(s >= 0.8 && s <= 1.6);
+  }
+});
+
+test("trimWatchtimeRequest shortens the following clip by at most 0.2s", () => {
+  const out = KPixel.trimWatchtimeRequest(
+    "https://www.youtube.com/api/stats/watchtime?docid=nextvidid1&et=10.400&cmt=10.400",
+    "",
+    KPixel.NEIGHBOR_TRIM_MAX
+  );
+  const sp = new URL(out.url).searchParams;
+  assert.equal(sp.get("et"), "10.200");
+  assert.equal(sp.get("cmt"), "10.200");
+  assert.equal(KPixel.NEIGHBOR_TRIM_MAX, 0.2);
+});
+
+test("stampWatchtimeVideo swaps docid and forces sine seconds", () => {
+  const out = KPixel.stampWatchtimeVideo(
+    "https://s.youtube.com/api/stats/watchtime?ns=yt&el=shortspage&docid=prevvideoid&et=4&cmt=4",
+    "",
+    "OB1uQrVzO9I",
+    1.111
+  );
+  const sp = new URL(out.url).searchParams;
+  assert.equal(sp.get("docid"), "OB1uQrVzO9I");
+  assert.equal(sp.get("et"), "1.111");
+  assert.equal(sp.get("cmt"), "1.111");
 });
 
 test("shouldRewriteShortsWatchtime only for t shorts watchtime pings", () => {

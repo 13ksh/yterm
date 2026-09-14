@@ -1,3 +1,7 @@
 [data-kpixel-hide="1"] {
   display: none !important;
 }
+
+[data-kpixel-hide="1"] video {
+  opacity: 0 !important;
+}
