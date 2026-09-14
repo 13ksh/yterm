@@ -184,6 +184,89 @@ async function lookupMany(channelIds) {
   return results;
 }
 
+async function fetchJson(url, extraHeaders) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 8000);
+  try {
+    const res = await fetch(url, {
+      method: "GET",
+      cache: "no-store",
+      signal: controller.signal,
+      headers: extraHeaders || {},
+    });
+    if (!res.ok) return null;
+    return await res.json();
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function bundledGithubRepo() {
+  try {
+    const res = await fetch(chrome.runtime.getURL("update-config.json"), {
+      cache: "no-store",
+    });
+    if (!res.ok) return "";
+    const data = await res.json();
+    const parsed = KPixel.parseGithubRepo(data && data.github);
+    return parsed ? KPixel.githubRepoSlug(parsed) : "";
+  } catch {
+    return "";
+  }
+}
+
+async function checkUpdate(githubHint) {
+  const installed = chrome.runtime.getManifest().version;
+  const stored = await chrome.storage.local.get({ githubRepo: "" });
+  const parsed = KPixel.parseGithubRepo(
+    githubHint || stored.githubRepo || (await bundledGithubRepo())
+  );
+  if (!parsed) {
+    return {
+      installed: installed,
+      needsRepo: true,
+      newer: false,
+    };
+  }
+  const githubRepo = KPixel.githubRepoSlug(parsed);
+  await chrome.storage.local.set({ githubRepo: githubRepo });
+  const feeds = KPixel.updateFeedUrls(parsed);
+  let remote = null;
+  for (const url of feeds.json) {
+    const data = await fetchJson(url);
+    remote = KPixel.parseUpdateManifest(data, feeds);
+    if (remote) break;
+  }
+  if (!remote) {
+    const release = await fetchJson(feeds.release, {
+      Accept: "application/vnd.github+json",
+    });
+    remote = KPixel.parseUpdateManifest(release, feeds);
+  }
+  if (!remote) {
+    return {
+      installed: installed,
+      githubRepo: githubRepo,
+      error: true,
+      newer: false,
+      page: feeds.page,
+    };
+  }
+  const newer = KPixel.compareVersions(remote.version, installed) > 0;
+  return {
+    installed: installed,
+    githubRepo: githubRepo,
+    latest: remote.version,
+    notes: remote.notes,
+    zip: remote.zip,
+    page: remote.page || feeds.page,
+    newer: newer,
+    needsRepo: false,
+  };
+}
+
 chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
   handleMessage(message)
     .then((result) => {
@@ -212,12 +295,15 @@ async function handleMessage(message) {
     return { forceT: memory.forceT };
   }
   if (type === "GET_STATE") {
+    const stored = await chrome.storage.local.get({ githubRepo: "" });
     return {
       enabled: memory.enabled,
       stats: memory.stats,
       cacheSize: Object.keys(memory.cache).length,
       flagged: Object.values(memory.cache).filter((r) => r.flag === "t").length,
       usage: usageView(),
+      version: chrome.runtime.getManifest().version,
+      githubRepo: stored.githubRepo || (await bundledGithubRepo()),
     };
   }
   if (type === "SET_ENABLED") {
@@ -253,9 +339,14 @@ async function handleMessage(message) {
     const results = await lookupMany(message.channelIds || []);
     return { results, enabled: memory.enabled };
   }
-  if (type === "LOOKUP_ONE") {
-    const flag = await lookupOne(message.channelId);
-    return { flag, enabled: memory.enabled };
+  if (type === "CHECK_UPDATE") {
+    return checkUpdate(message.github);
+  }
+  if (type === "SET_GITHUB_REPO") {
+    const parsed = KPixel.parseGithubRepo(message.github);
+    const githubRepo = parsed ? KPixel.githubRepoSlug(parsed) : "";
+    await chrome.storage.local.set({ githubRepo: githubRepo });
+    return { githubRepo: githubRepo };
   }
   return undefined;
 }

@@ -996,6 +996,115 @@ var KPixel = (function () {
     return x.toFixed(1);
   }
 
+  function parseVersionParts(value) {
+    return String(value || "")
+      .trim()
+      .replace(/^v/i, "")
+      .split(/[.+-]/)
+      .map((part) => {
+        const n = parseInt(part, 10);
+        return Number.isFinite(n) ? n : 0;
+      });
+  }
+
+  function compareVersions(a, b) {
+    const pa = parseVersionParts(a);
+    const pb = parseVersionParts(b);
+    const n = Math.max(pa.length, pb.length);
+    for (let i = 0; i < n; i++) {
+      const da = pa[i] || 0;
+      const db = pb[i] || 0;
+      if (da > db) return 1;
+      if (da < db) return -1;
+    }
+    return 0;
+  }
+
+  function parseGithubRepo(input) {
+    const raw = String(input || "").trim();
+    if (!raw) return null;
+    const fromUrl = raw.match(
+      /(?:github\.com[:/]+|cdn\.jsdelivr\.net\/gh\/|raw\.githubusercontent\.com\/)([^/]+)\/([^/#?\s]+)/i
+    );
+    const fromShort = raw.match(/^([\w.-]+)\/([\w.-]+)$/);
+    const m = fromUrl || fromShort;
+    if (!m) return null;
+    const owner = m[1];
+    const repo = String(m[2]).replace(/\.git$/i, "");
+    if (!owner || !repo || owner === "http:" || owner === "https:") return null;
+    return { owner: owner, repo: repo };
+  }
+
+  function githubRepoSlug(repo) {
+    if (!repo || !repo.owner || !repo.repo) return "";
+    return repo.owner + "/" + repo.repo;
+  }
+
+  function updateFeedUrls(repo) {
+    const slug = githubRepoSlug(repo);
+    if (!slug) return null;
+    const o = repo.owner;
+    const r = repo.repo;
+    return {
+      json: [
+        "https://raw.githubusercontent.com/" + o + "/" + r + "/main/updates.json",
+        "https://cdn.jsdelivr.net/gh/" + o + "/" + r + "@main/updates.json",
+      ],
+      release: "https://api.github.com/repos/" + o + "/" + r + "/releases/latest",
+      zipRaw:
+        "https://raw.githubusercontent.com/" +
+        o +
+        "/" +
+        r +
+        "/main/kpixel-channel-filter.zip",
+      zipCdn:
+        "https://cdn.jsdelivr.net/gh/" + o + "/" + r + "@main/kpixel-channel-filter.zip",
+      zipRelease:
+        "https://github.com/" +
+        o +
+        "/" +
+        r +
+        "/releases/latest/download/kpixel-channel-filter.zip",
+      page: "https://github.com/" + o + "/" + r,
+    };
+  }
+
+  function resolveUpdateZip(zip, feeds) {
+    const value = String(zip || "").trim();
+    if (!value) return (feeds && (feeds.zipRelease || feeds.zipCdn || feeds.zipRaw)) || "";
+    if (/^https?:\/\//i.test(value)) return value;
+    if (!feeds) return value;
+    return String(feeds.zipRaw || "").replace(/kpixel-channel-filter\.zip$/i, value.replace(/^\//, ""));
+  }
+
+  function parseUpdateManifest(data, feeds) {
+    if (!data || typeof data !== "object") return null;
+    if (data.tag_name || Array.isArray(data.assets)) {
+      const version = String(data.tag_name || data.name || "").replace(/^v/i, "");
+      if (!version) return null;
+      const assets = Array.isArray(data.assets) ? data.assets : [];
+      const zipAsset =
+        assets.find((row) => /kpixel.*\.zip$/i.test(row && row.name)) ||
+        assets.find((row) => /\.zip$/i.test(row && row.name));
+      return {
+        version: version,
+        notes: String(data.body || "").trim(),
+        zip:
+          (zipAsset && zipAsset.browser_download_url) ||
+          resolveUpdateZip("", feeds),
+        page: data.html_url || (feeds && feeds.page) || "",
+      };
+    }
+    const version = String(data.version || "").replace(/^v/i, "");
+    if (!version) return null;
+    return {
+      version: version,
+      notes: String(data.notes || data.changelog || "").trim(),
+      zip: resolveUpdateZip(data.zip || data.download || "", feeds),
+      page: data.page || data.url || (feeds && feeds.page) || "",
+    };
+  }
+
   const api = {
     UC_RE,
     ITEM_SELECTORS,
@@ -1053,6 +1162,13 @@ var KPixel = (function () {
     bumpUsageSafe,
     mergeUsageSafe,
     formatUsageNumber,
+    parseVersionParts,
+    compareVersions,
+    parseGithubRepo,
+    githubRepoSlug,
+    updateFeedUrls,
+    resolveUpdateZip,
+    parseUpdateManifest,
   };
 
   return api;

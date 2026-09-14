@@ -52,7 +52,7 @@ h1 {
 
 .brand p,
 .status p,
-.lookup label,
+.update-current,
 .stats span,
 .usage span,
 .usage-avg,
@@ -65,7 +65,7 @@ footer,
 
 .status,
 .stats,
-.lookup,
+.update,
 .usage {
   margin-top: 12px;
   background: var(--card);
@@ -173,6 +173,33 @@ button.ghost {
   background: transparent;
   color: var(--muted);
   padding: 0;
+}
+
+.update-current {
+  margin-bottom: 8px;
+}
+
+.update-current strong {
+  color: var(--text);
+}
+
+.update-actions {
+  display: flex;
+  gap: 12px;
+  margin-top: 8px;
+  flex-wrap: wrap;
+}
+
+.update-download,
+.update-page {
+  color: var(--ok);
+  text-decoration: none;
+  font-weight: 600;
+}
+
+.update-page {
+  color: var(--muted);
+  font-weight: 500;
 }
 
 .result {

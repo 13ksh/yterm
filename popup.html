@@ -67,19 +67,25 @@
       </div>
     </section>
 
-    <section class="lookup">
-      <label for="channelInput">채널 ID 확인</label>
+    <section class="update" id="updateBox">
+      <p class="usage-kicker">업데이트</p>
+      <p class="update-current">지금 설치됨 <strong id="installedVersion">–</strong></p>
       <div class="row">
         <input
-          id="channelInput"
+          id="githubInput"
           type="text"
           spellcheck="false"
-          placeholder="UC…"
-          maxlength="24"
+          placeholder="github.com/아이디/저장소"
         />
-        <button type="button" id="lookupBtn">조회</button>
+        <button type="button" id="updateBtn">확인</button>
       </div>
-      <p class="result" id="lookupResult">del.kpixel.net / 채널ID → t 또는 f</p>
+      <p class="result" id="updateNote">
+        서버는 필요 없습니다. GitHub 저장소를 공개한 뒤 주소만 넣으면 새 zip을 여기서 받습니다.
+      </p>
+      <div class="update-actions">
+        <a id="updateDownload" class="update-download" hidden href="#" target="_blank" rel="noopener">새 버전 zip 받기</a>
+        <a id="updatePage" class="update-page" hidden href="#" target="_blank" rel="noopener">저장소 열기</a>
+      </div>
     </section>
 
     <footer>

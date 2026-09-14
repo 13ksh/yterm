@@ -24,12 +24,32 @@ async function activeYoutubeTab() {
   return tab;
 }
 
+function setNote(text, kind) {
+  $("updateNote").textContent = text;
+  $("updateNote").className = "result" + (kind ? " " + kind : "");
+}
+
+function setLink(id, href) {
+  const el = $(id);
+  if (!href) {
+    el.hidden = true;
+    el.removeAttribute("href");
+    return;
+  }
+  el.href = href;
+  el.hidden = false;
+}
+
 async function refresh() {
   const state = await send({ type: "GET_STATE" });
   $("enabled").checked = state.enabled !== false;
   $("flaggedCount").textContent = String(state.flagged || 0);
   $("lookupCount").textContent = String((state.stats && state.stats.lookups) || 0);
   $("cacheSize").textContent = "캐시 " + (state.cacheSize || 0);
+  $("installedVersion").textContent = state.version || "–";
+  if (state.githubRepo && !$("githubInput").value) {
+    $("githubInput").value = "https://github.com/" + state.githubRepo;
+  }
   renderUsage(state.usage);
 
   const tab = await activeYoutubeTab();
@@ -50,7 +70,7 @@ async function refresh() {
     ? kind === "search"
       ? "이 탭은 검색이라 결과를 그대로 둡니다."
       : kind === "shorts"
-        ? "t 쇼츠는 화면에 안 보이고, 내부 시청은 0.8~1.6초(가운데가 더 자주)로 남깁니다. 다음 영상은 최대 0.2초 줄입니다."
+        ? "t 쇼츠는 목록에서 빠집니다. 1·2·3에서 2를 숨기면 3에서 위로 1이 그대로 나옵니다."
         : "t 채널 항목을 이 페이지에서 숨기고 있습니다."
     : "필터가 꺼져 있습니다.";
 
@@ -77,41 +97,57 @@ $("enabled").addEventListener("change", async (e) => {
 
 $("clearCache").addEventListener("click", async () => {
   await send({ type: "CLEAR_CACHE" });
-  $("lookupResult").textContent =
-    "채널 캐시만 비웠습니다. 시청·차단 총합은 그대로 둡니다.";
-  $("lookupResult").className = "result";
+  setNote("채널 캐시만 비웠습니다. 시청·차단 총합은 그대로 둡니다.");
+  setLink("updateDownload", "");
+  setLink("updatePage", "");
   refresh();
 });
 
-$("lookupBtn").addEventListener("click", runLookup);
-$("channelInput").addEventListener("keydown", (e) => {
-  if (e.key === "Enter") runLookup();
+$("updateBtn").addEventListener("click", runUpdateCheck);
+$("githubInput").addEventListener("keydown", (e) => {
+  if (e.key === "Enter") runUpdateCheck();
 });
 
-async function runLookup() {
-  const raw = $("channelInput").value.trim();
-  const id = raw.replace(/^https?:\/\/(www\.)?youtube\.com\/channel\//, "").split(/[/?#]/)[0];
-  if (!KPixel.isUcId(id)) {
-    $("lookupResult").textContent = "UC로 시작하는 24자 채널 ID를 넣어 주세요.";
-    $("lookupResult").className = "result unknown";
+async function runUpdateCheck() {
+  const github = $("githubInput").value.trim();
+  setNote("새 버전 확인 중…");
+  setLink("updateDownload", "");
+  setLink("updatePage", "");
+  const res = await send({ type: "CHECK_UPDATE", github: github });
+  if (!res || res.error) {
+    setNote(
+      "업데이트 정보를 읽지 못했습니다. GitHub 저장소가 공개돼 있는지, 주소가 맞는지 확인해 주세요.",
+      "unknown"
+    );
+    if (res && res.page) setLink("updatePage", res.page);
     return;
   }
-  $("lookupResult").textContent = "조회 중…";
-  $("lookupResult").className = "result";
-  const res = await send({ type: "LOOKUP_ONE", channelId: id });
-  const flag = res && res.flag;
-  if (flag === "t") {
-        $("lookupResult").textContent =
-          "t · 피드·댓글·게시물·쇼츠에서 숨깁니다. 쇼츠는 내부 0.8~1.6초 시청으로 남깁니다. 검색은 그대로 둡니다.";
-    $("lookupResult").className = "result t";
-  } else if (flag === "f") {
-    $("lookupResult").textContent = "f · 숨기지 않습니다.";
-    $("lookupResult").className = "result f";
-  } else {
-    $("lookupResult").textContent = "응답을 읽지 못했습니다. 잠시 후 다시 확인해 주세요.";
-    $("lookupResult").className = "result unknown";
+  if (res.needsRepo) {
+    setNote(
+      "서버는 없어도 됩니다. 이 프로젝트를 GitHub에 공개한 다음 github.com/아이디/저장소 주소를 넣고 확인을 누르세요.",
+      "unknown"
+    );
+    return;
   }
-  refresh();
+  if (res.githubRepo) {
+    $("githubInput").value = "https://github.com/" + res.githubRepo;
+  }
+  if (res.newer) {
+    const notes = res.notes ? " · " + res.notes.replace(/\s+/g, " ").slice(0, 140) : "";
+    setNote(
+      "새 버전 " +
+        res.latest +
+        "이 있습니다" +
+        notes +
+        ". zip을 받아 푼 뒤 chrome://extensions에서 이 확장을 새로고침하세요.",
+      "t"
+    );
+    setLink("updateDownload", res.zip);
+    setLink("updatePage", res.page);
+    return;
+  }
+  setNote("지금 설치본이 최신입니다. " + (res.latest || res.installed), "f");
+  setLink("updatePage", res.page);
 }
 
 function renderUsage(usage) {
@@ -139,4 +175,12 @@ function renderUsage(usage) {
     "일 저장. 캐시를 비워도 이 숫자는 남습니다.";
 }
 
-refresh();
+refresh().then(async () => {
+  const github = $("githubInput").value.trim();
+  if (!github) return;
+  try {
+    await runUpdateCheck();
+  } catch {
+    /* ignore auto-check errors */
+  }
+});

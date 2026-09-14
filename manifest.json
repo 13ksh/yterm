@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "KPixel 채널 필터",
   "short_name": "KPixel",
-  "version": "1.5.2",
+  "version": "1.6.0",
   "description": "del.kpixel.net에서 t인 채널을 유튜브에서 숨깁니다. 시청·차단 총합을 기기에 저장하고, 쇼츠는 0.8~1.6초로 처리합니다.",
   "icons": {
     "16": "icons/icon16.png",
@@ -25,7 +25,10 @@
     "https://www.youtube.com/*",
     "https://m.youtube.com/*",
     "https://youtube.com/*",
-    "https://s.youtube.com/*"
+    "https://s.youtube.com/*",
+    "https://raw.githubusercontent.com/*",
+    "https://cdn.jsdelivr.net/*",
+    "https://api.github.com/*"
   ],
   "background": {
     "service_worker": "background.js"
