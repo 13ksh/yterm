@@ -1,0 +1,206 @@
+:root {
+  color-scheme: dark;
+  --bg: #0f0f0f;
+  --panel: #171717;
+  --card: #212121;
+  --line: #303030;
+  --text: #f1f1f1;
+  --muted: #aaa;
+  --accent: #ff4d6d;
+  --ok: #3dd68c;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  min-height: 100%;
+  background: var(--bg);
+  color: var(--text);
+  font: 15px/1.5 "Segoe UI", "Apple SD Gothic Neo", "Noto Sans KR", sans-serif;
+}
+
+.app {
+  display: grid;
+  grid-template-columns: 320px 1fr;
+  min-height: 100vh;
+}
+
+aside {
+  padding: 28px 22px;
+  border-right: 1px solid var(--line);
+  background: var(--panel);
+}
+
+.logo {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+}
+
+.logo img {
+  border-radius: 8px;
+}
+
+.logo span,
+.lead,
+ol,
+.hint,
+.count,
+.lookup-card p {
+  color: var(--muted);
+}
+
+.lead {
+  margin: 18px 0;
+}
+
+code,
+em {
+  color: var(--accent);
+  font-style: normal;
+}
+
+ol {
+  padding-left: 18px;
+}
+
+.lookup-card,
+.card {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+}
+
+.lookup-card {
+  margin-top: 22px;
+  padding: 12px;
+}
+
+.row {
+  display: flex;
+  gap: 8px;
+  margin: 8px 0;
+}
+
+input {
+  flex: 1;
+  min-width: 0;
+  border: 1px solid var(--line);
+  background: #111;
+  color: var(--text);
+  border-radius: 8px;
+  padding: 8px;
+  font: inherit;
+}
+
+button {
+  border: 0;
+  border-radius: 8px;
+  background: var(--accent);
+  color: #fff;
+  padding: 8px 12px;
+  font: inherit;
+  cursor: pointer;
+}
+
+main {
+  padding: 24px 28px 48px;
+}
+
+.tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.tabs button {
+  background: #2a2a2a;
+  color: var(--text);
+}
+
+.tabs button.on {
+  background: var(--accent);
+}
+
+.hint {
+  margin: 16px 0 12px;
+}
+
+.feed {
+  display: grid;
+  gap: 12px;
+}
+
+.feed.home,
+.feed.search {
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+}
+
+.feed.shorts {
+  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+}
+
+.card {
+  padding: 12px;
+  min-height: 120px;
+}
+
+.card .thumb {
+  height: 92px;
+  border-radius: 8px;
+  background: linear-gradient(135deg, #3a2330, #1b1b1b);
+  margin-bottom: 10px;
+}
+
+.feed.shorts .card .thumb {
+  height: 180px;
+}
+
+.card h3 {
+  margin: 0 0 4px;
+  font-size: 14px;
+}
+
+.card p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.card[data-kpixel-hide="1"] {
+  display: none !important;
+}
+
+.badge {
+  display: inline-block;
+  margin-top: 8px;
+  font-size: 11px;
+  padding: 2px 6px;
+  border-radius: 999px;
+  background: #333;
+}
+
+.badge.t {
+  background: #4a1d28;
+  color: #ff8aa0;
+}
+
+.badge.f {
+  background: #1d3a2a;
+  color: var(--ok);
+}
+
+@media (max-width: 860px) {
+  .app {
+    grid-template-columns: 1fr;
+  }
+
+  aside {
+    border-right: 0;
+    border-bottom: 1px solid var(--line);
+  }
+}

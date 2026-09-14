@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="ko">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>KPixel 채널 필터</title>
+    <link rel="stylesheet" href="popup.css" />
+  </head>
+  <body>
+    <header class="head">
+      <div class="brand">
+        <img src="icons/icon32.png" alt="" width="24" height="24" />
+        <div>
+          <h1>KPixel 채널 필터</h1>
+          <p>t 채널만 피드에서 가림 · 검색은 유지</p>
+        </div>
+      </div>
+      <label class="switch">
+        <input type="checkbox" id="enabled" checked />
+        <span class="slider"></span>
+      </label>
+    </header>
+
+    <section class="status" id="statusBox">
+      <div class="pill" id="pageKind">페이지 확인 중</div>
+      <p id="statusText">유튜브 탭에서 숨김 상태를 표시합니다.</p>
+    </section>
+
+    <section class="stats">
+      <div>
+        <strong id="hiddenCount">0</strong>
+        <span>이 페이지에서 숨김</span>
+      </div>
+      <div>
+        <strong id="flaggedCount">0</strong>
+        <span>캐시된 t 채널</span>
+      </div>
+      <div>
+        <strong id="lookupCount">0</strong>
+        <span>API 조회</span>
+      </div>
+    </section>
+
+    <section class="lookup">
+      <label for="channelInput">채널 ID 확인</label>
+      <div class="row">
+        <input
+          id="channelInput"
+          type="text"
+          spellcheck="false"
+          placeholder="UC…"
+          maxlength="24"
+        />
+        <button type="button" id="lookupBtn">조회</button>
+      </div>
+      <p class="result" id="lookupResult">del.kpixel.net / 채널ID → t 또는 f</p>
+    </section>
+
+    <footer>
+      <button type="button" class="ghost" id="clearCache">캐시 비우기</button>
+      <span id="cacheSize">캐시 0</span>
+    </footer>
+    <script src="shared.js"></script>
+    <script src="popup.js"></script>
+  </body>
+</html>
