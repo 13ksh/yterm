@@ -2,13 +2,14 @@
   "name": "comment-tree",
   "version": "0.1.0",
   "private": true,
-  "description": "Turn YouTube comments into a copyable reply tree.",
+  "description": "YouTube comment trees plus a color ASCII CLI player at 8 FPS.",
   "scripts": {
     "dev": "next dev --port 43147 --hostname 0.0.0.0",
     "build": "next build",
     "start": "next start --port 43147 --hostname 0.0.0.0",
     "lint": "eslint",
-    "test": "tsx --test src/lib/*.test.ts"
+    "test": "tsx --test src/lib/*.test.ts src/cli/*.test.ts",
+    "ascii": "tsx src/cli/index.ts"
   },
   "dependencies": {
     "@base-ui/react": "^1.8.0",
