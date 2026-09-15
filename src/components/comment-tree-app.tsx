@@ -1,6 +1,6 @@
 "use client"
 
-import { useMemo, useRef, useState } from "react"
+import { useMemo, useRef, useState, type FormEvent, type ReactNode } from "react"
 import {
   CheckIcon,
   CopyIcon,
@@ -11,8 +11,7 @@ import {
 } from "lucide-react"
 import { toast } from "sonner"
 import { Badge } from "@/components/ui/badge"
-import { Button } from "@/components/ui/button"
-import { Input } from "@/components/ui/input"
+import { Button, buttonVariants } from "@/components/ui/button"
 import {
   Select,
   SelectContent,
@@ -30,6 +29,7 @@ import {
   type FlatComment,
 } from "@/lib/tree"
 import { parseVideoId } from "@/lib/video-id"
+import { cn } from "@/lib/utils"
 
 type SortMode = "popular" | "recent"
 type Source = "demo" | "youtube"
@@ -49,6 +49,30 @@ const DEMO_VIDEO: LoadedVideo = {
   channel: "예시 댓글",
   thumbnailUrl: "",
   comments: DEMO_COMMENTS,
+}
+
+function ToggleChip({
+  pressed,
+  onToggle,
+  children,
+}: {
+  pressed: boolean
+  onToggle: () => void
+  children: ReactNode
+}) {
+  return (
+    <button
+      type="button"
+      aria-pressed={pressed}
+      onClick={onToggle}
+      className="flex h-8 items-center gap-2 rounded-lg border border-white/10 px-2.5 text-sm text-zinc-300 hover:bg-white/5"
+    >
+      <span className="pointer-events-none">
+        <Switch checked={pressed} size="sm" />
+      </span>
+      {children}
+    </button>
+  )
 }
 
 export function CommentTreeApp() {
@@ -81,6 +105,7 @@ export function CommentTreeApp() {
   async function loadComments(nextUrl: string) {
     const videoId = parseVideoId(nextUrl)
     if (!videoId) {
+      setError("유튜브 영상 주소를 붙여 넣어 주세요.")
       toast.error("유튜브 영상 주소를 붙여 넣어 주세요.")
       return
     }
@@ -122,11 +147,12 @@ export function CommentTreeApp() {
     }
   }
 
-  function submitFromEvent(event?: { preventDefault(): void }) {
-    event?.preventDefault()
-    const typed = urlRef.current?.value || url
-    setUrl(typed)
-    void loadComments(typed)
+  function onFormSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    const typed = new FormData(event.currentTarget).get("url")
+    const nextUrl = String(typed ?? urlRef.current?.value ?? url)
+    setUrl(nextUrl)
+    void loadComments(nextUrl)
   }
 
   function loadDemo() {
@@ -184,26 +210,21 @@ export function CommentTreeApp() {
       </header>
 
       <div className="rounded-2xl border border-white/10 bg-card/80 p-3 shadow-sm backdrop-blur sm:p-4">
-        <form
-          className="flex flex-col gap-3 sm:flex-row"
-          onSubmit={submitFromEvent}
-        >
-          <Input
+        <form className="flex flex-col gap-3 sm:flex-row" onSubmit={onFormSubmit}>
+          <input
             ref={urlRef}
             name="url"
             value={url}
-            onValueChange={setUrl}
             onChange={(event) => setUrl(event.currentTarget.value)}
             placeholder="https://www.youtube.com/watch?v=..."
             aria-label="유튜브 영상 주소"
-            className="h-10 flex-1 bg-black/20 text-sm"
+            autoComplete="off"
+            className="h-10 min-w-0 flex-1 rounded-lg border border-input bg-black/20 px-2.5 text-sm outline-none placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
           />
-          <Button
+          <button
             type="submit"
-            nativeButton
-            className="h-10 px-4"
             disabled={loading}
-            onClick={submitFromEvent}
+            className={cn(buttonVariants({ size: "lg" }), "h-10 px-4")}
           >
             {loading ? (
               <Loader2Icon className="animate-spin" data-icon="inline-start" />
@@ -211,7 +232,7 @@ export function CommentTreeApp() {
               <ListTreeIcon data-icon="inline-start" />
             )}
             {loading ? "불러오는 중" : "트리 만들기"}
-          </Button>
+          </button>
         </form>
 
         <div className="mt-4 flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-center">
@@ -246,23 +267,18 @@ export function CommentTreeApp() {
             </SelectContent>
           </Select>
 
-          <div className="flex h-8 items-center gap-2 rounded-lg border border-white/10 px-2.5 text-sm text-zinc-300">
-            <Switch
-              checked={nestMentions}
-              onCheckedChange={setNestMentions}
-              size="sm"
-            />
+          <ToggleChip
+            pressed={nestMentions}
+            onToggle={() => setNestMentions((value) => !value)}
+          >
             @멘션으로 묶기
-          </div>
-
-          <div className="flex h-8 items-center gap-2 rounded-lg border border-white/10 px-2.5 text-sm text-zinc-300">
-            <Switch
-              checked={showLikes}
-              onCheckedChange={setShowLikes}
-              size="sm"
-            />
+          </ToggleChip>
+          <ToggleChip
+            pressed={showLikes}
+            onToggle={() => setShowLikes((value) => !value)}
+          >
             좋아요 표시
-          </div>
+          </ToggleChip>
         </div>
       </div>
 
@@ -271,11 +287,21 @@ export function CommentTreeApp() {
           role="alert"
           className="rounded-xl border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive"
         >
-          {error} 아래 예시 트리로 형식을 먼저 볼 수 있습니다.
+          {error}
         </div>
       ) : null}
 
-      <section className="overflow-hidden rounded-2xl border border-white/10 bg-[#12100e] shadow-[0_20px_80px_-40px_rgba(0,0,0,0.8)]">
+      {loading ? (
+        <p className="text-sm text-amber-200/90" role="status">
+          댓글을 읽고 트리를 그리는 중…
+        </p>
+      ) : null}
+
+      <section
+        className="overflow-hidden rounded-2xl border border-white/10 bg-[#12100e] shadow-[0_20px_80px_-40px_rgba(0,0,0,0.8)]"
+        data-show-likes={showLikes ? "true" : "false"}
+        data-nest-mentions={nestMentions ? "true" : "false"}
+      >
         <div className="flex flex-col gap-3 border-b border-white/10 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
           <div className="flex min-w-0 items-center gap-3">
             {video.thumbnailUrl ? (
@@ -317,16 +343,7 @@ export function CommentTreeApp() {
           </div>
         </div>
 
-        {loading ? (
-          <div className="space-y-2 p-5 font-mono text-sm text-zinc-600">
-            <div className="h-4 w-48 animate-pulse rounded bg-white/8" />
-            <div className="h-4 w-72 animate-pulse rounded bg-white/6" />
-            <div className="h-4 w-64 animate-pulse rounded bg-white/6" />
-            <div className="h-4 w-80 animate-pulse rounded bg-white/5" />
-            <div className="h-4 w-56 animate-pulse rounded bg-white/5" />
-            <p className="pt-3 text-xs text-zinc-500">댓글을 읽고 트리를 그리는 중…</p>
-          </div>
-        ) : forest.length === 0 ? (
+        {forest.length === 0 ? (
           <div className="px-5 py-16 text-center text-sm text-zinc-500">
             표시할 댓글이 없습니다.
           </div>
