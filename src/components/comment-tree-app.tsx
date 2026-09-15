@@ -88,7 +88,6 @@ function ToggleChip({
 export function CommentTreeApp() {
   const [url, setUrl] = useState("")
   const [sort, setSort] = useState<SortMode>("popular")
-  const [maxComments, setMaxComments] = useState("40")
   const [nestMentions, setNestMentions] = useState(true)
   const [showLikes, setShowLikes] = useState(false)
   const [loading, setLoading] = useState(false)
@@ -131,8 +130,8 @@ export function CommentTreeApp() {
         body: JSON.stringify({
           url: nextUrl,
           sort,
-          maxComments: Number(maxComments),
         }),
+        signal: AbortSignal.timeout(295_000),
       })
       const data = (await response.json()) as LoadedVideo & { error?: string }
       if (!response.ok) {
@@ -146,9 +145,14 @@ export function CommentTreeApp() {
         comments: data.comments,
         videoId,
       })
-      toast.success("댓글 트리를 만들었습니다.")
+      toast.success(`댓글 ${data.comments.length}개를 불러왔습니다.`)
     } catch (err) {
-      const message = err instanceof Error ? err.message : "불러오기에 실패했습니다."
+      const message =
+        err instanceof DOMException && err.name === "TimeoutError"
+          ? "불러오기가 너무 오래 걸렸습니다. 다시 시도해 주세요."
+          : err instanceof Error
+            ? err.message
+            : "불러오기에 실패했습니다."
       setError(message)
       toast.error(message)
     } finally {
@@ -241,7 +245,7 @@ export function CommentTreeApp() {
             ) : (
               <ListTreeIcon data-icon="inline-start" />
             )}
-            {loading ? "불러오는 중" : "트리 만들기"}
+            {loading ? "모두 불러오는 중" : "트리 만들기"}
           </button>
         </form>
 
@@ -258,22 +262,6 @@ export function CommentTreeApp() {
             <SelectContent alignItemWithTrigger={false} align="start">
               <SelectItem value="popular">인기 댓글</SelectItem>
               <SelectItem value="recent">최신 댓글</SelectItem>
-            </SelectContent>
-          </Select>
-
-          <Select
-            value={maxComments}
-            onValueChange={(value) => {
-              if (value) setMaxComments(String(value))
-            }}
-          >
-            <SelectTrigger className="h-8 w-full sm:w-32">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent alignItemWithTrigger={false} align="start">
-              <SelectItem value="20">댓글 20개</SelectItem>
-              <SelectItem value="40">댓글 40개</SelectItem>
-              <SelectItem value="80">댓글 80개</SelectItem>
             </SelectContent>
           </Select>
 
@@ -303,7 +291,7 @@ export function CommentTreeApp() {
 
       {loading ? (
         <p className="text-sm text-amber-200/90" role="status">
-          댓글을 읽고 트리를 그리는 중…
+          댓글을 모두 읽는 중… 댓글이 많으면 조금 걸립니다.
         </p>
       ) : null}
 

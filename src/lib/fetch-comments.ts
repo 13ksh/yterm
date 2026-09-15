@@ -284,7 +284,12 @@ function collectNextPageEndpoints(data: unknown): Json[] {
   for (const action of actions) {
     const obj = asObject(action)
     const targetId = String(obj?.targetId ?? "")
-    if (!COMMENT_SECTION_IDS.has(targetId)) continue
+    if (
+      !COMMENT_SECTION_IDS.has(targetId) &&
+      !targetId.startsWith("comment-replies-item")
+    ) {
+      continue
+    }
     const items = Array.isArray(obj?.continuationItems) ? obj.continuationItems : []
     for (const item of items) {
       const renderer = asObject(asObject(item)?.continuationItemRenderer)
@@ -312,12 +317,30 @@ function collectReplyEndpoints(data: unknown): { parentId: string; endpoint: Jso
   return out
 }
 
+function tokenOf(endpoint: Json): string {
+  return String(asObject(endpoint.continuationCommand)?.token ?? "")
+}
+
 export async function fetchVideoComments(options: {
   videoId: string
   sort: "popular" | "recent"
-  maxComments: number
 }): Promise<VideoComments> {
-  const { videoId, sort, maxComments } = options
+  const { videoId, sort } = options
+  const SAFETY_CAP = 50_000
+  const REPLY_BATCH = 8
+  const budgetMs = 270_000
+  const started = Date.now()
+  const hasTime = () => Date.now() - started < budgetMs
+  const underCap = () => collected.size < SAFETY_CAP
+  const seenTokens = new Set<string>()
+  const collected = new Map<string, FlatComment>()
+  const enqueue = (endpoint: Json | null, queue: Json[]) => {
+    if (!endpoint) return
+    const token = tokenOf(endpoint)
+    if (!token || seenTokens.has(token)) return
+    seenTokens.add(token)
+    queue.push(endpoint)
+  }
   const watchUrl = `https://www.youtube.com/watch?v=${videoId}&hl=ko&gl=KR`
   const page = await fetch(watchUrl, {
     headers: {
@@ -349,8 +372,7 @@ export async function fetchVideoComments(options: {
     .find((items) => Array.isArray(items) && items.length > 0) as unknown[] | undefined
 
   const pageQueue: Json[] = []
-  const replyEndpoints: { parentId: string; endpoint: Json }[] = []
-  const collected = new Map<string, FlatComment>()
+  const replyQueue: Json[] = []
 
   if (!sortMenu) {
     const itemSection = findAll(initial, "itemSectionRenderer")[0]
@@ -362,7 +384,8 @@ export async function fetchVideoComments(options: {
       const boot = await ajaxRequest(first, ytcfg)
       if (boot) {
         collectComments(boot, collected)
-        replyEndpoints.push(...collectReplyEndpoints(boot))
+        for (const item of collectReplyEndpoints(boot)) enqueue(item.endpoint, replyQueue)
+        for (const next of collectNextPageEndpoints(boot)) enqueue(next, pageQueue)
         sortMenu = findAll(boot, "sortFilterSubMenuRenderer")
           .map((renderer) => asObject(renderer)?.subMenuItems)
           .find((items) => Array.isArray(items) && items.length > 0) as unknown[] | undefined
@@ -371,26 +394,14 @@ export async function fetchVideoComments(options: {
   }
 
   if (sortMenu && sortMenu.length > sortIndex) {
-    const endpoint = continuationOf(asObject(sortMenu[sortIndex])?.serviceEndpoint)
-    if (endpoint) pageQueue.push(endpoint)
+    enqueue(continuationOf(asObject(sortMenu[sortIndex])?.serviceEndpoint), pageQueue)
   } else {
-    const fallback = continuationOf(findAll(initial, "continuationEndpoint")[0])
-    if (fallback) pageQueue.push(fallback)
+    enqueue(continuationOf(findAll(initial, "continuationEndpoint")[0]), pageQueue)
   }
 
-  const started = Date.now()
-  const budgetMs = 18_000
-  const seenTokens = new Set<string>()
-
-  while (pageQueue.length && Date.now() - started < budgetMs) {
-    const tops = [...collected.values()].filter((comment) => !comment.parentId).length
-    if (tops >= maxComments) break
-
+  while (pageQueue.length && hasTime() && underCap()) {
     const endpoint = pageQueue.shift()
     if (!endpoint) break
-    const token = String(asObject(endpoint.continuationCommand)?.token ?? "")
-    if (!token || seenTokens.has(token)) continue
-    seenTokens.add(token)
 
     const response = await ajaxRequest(endpoint, ytcfg)
     if (!response) continue
@@ -399,36 +410,23 @@ export async function fetchVideoComments(options: {
     if (typeof error === "string" && error) throw new Error(error)
 
     collectComments(response, collected)
-    replyEndpoints.push(...collectReplyEndpoints(response))
-    if ([...collected.values()].filter((comment) => !comment.parentId).length < maxComments) {
-      pageQueue.push(...collectNextPageEndpoints(response))
-    }
+    for (const item of collectReplyEndpoints(response)) enqueue(item.endpoint, replyQueue)
+    for (const next of collectNextPageEndpoints(response)) enqueue(next, pageQueue)
   }
 
-  const keepIds = new Set(
-    [...collected.values()]
-      .filter((comment) => !comment.parentId)
-      .slice(0, maxComments)
-      .map((comment) => comment.id),
-  )
-  const repliesToLoad = new Map<string, Json>()
-  for (const item of replyEndpoints) {
-    if (keepIds.has(item.parentId) && !repliesToLoad.has(item.parentId)) {
-      repliesToLoad.set(item.parentId, item.endpoint)
-    }
-  }
-
-  const replyList = [...repliesToLoad.values()]
-  for (let i = 0; i < replyList.length && Date.now() - started < budgetMs; i += 5) {
-    const batch = replyList.slice(i, i + 5)
+  while (replyQueue.length && hasTime() && underCap()) {
+    const batch = replyQueue.splice(0, REPLY_BATCH)
     const responses = await Promise.all(batch.map((endpoint) => ajaxRequest(endpoint, ytcfg)))
     for (const response of responses) {
-      if (response) collectComments(response, collected)
+      if (!response) continue
+      collectComments(response, collected)
+      for (const item of collectReplyEndpoints(response)) enqueue(item.endpoint, replyQueue)
+      for (const next of collectNextPageEndpoints(response)) enqueue(next, replyQueue)
     }
   }
 
   const comments = [...collected.values()]
-  const topLevel = comments.filter((comment) => !comment.parentId).slice(0, maxComments)
+  const topLevel = comments.filter((comment) => !comment.parentId)
   const allowed = new Set(topLevel.map((comment) => comment.id))
   const replies = comments.filter(
     (comment) => comment.parentId && allowed.has(comment.parentId),

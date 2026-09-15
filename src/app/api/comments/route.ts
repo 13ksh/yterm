@@ -3,13 +3,12 @@ import { fetchVideoComments } from "@/lib/fetch-comments"
 import { parseVideoId } from "@/lib/video-id"
 
 export const runtime = "nodejs"
-export const maxDuration = 60
+export const maxDuration = 300
 export const dynamic = "force-dynamic"
 
 type Body = {
   url?: string
   sort?: "popular" | "recent"
-  maxComments?: number
 }
 
 export async function POST(request: Request) {
@@ -29,10 +28,9 @@ export async function POST(request: Request) {
   }
 
   const sort = body.sort === "recent" ? "recent" : "popular"
-  const maxComments = Math.min(100, Math.max(5, Number(body.maxComments) || 40))
 
   try {
-    const result = await fetchVideoComments({ videoId, sort, maxComments })
+    const result = await fetchVideoComments({ videoId, sort })
     return NextResponse.json(result)
   } catch (error) {
     const message =
