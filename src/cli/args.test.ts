@@ -20,6 +20,7 @@ test("parses demo, youtube url, and flags", () => {
     "--frames",
     "3",
     "--no-alt",
+    "--snapshot",
   ])
   assert.equal(opts.demo, true)
   assert.equal(opts.fps, 8)
@@ -27,6 +28,7 @@ test("parses demo, youtube url, and flags", () => {
   assert.equal(opts.rows, 16)
   assert.equal(opts.frames, 3)
   assert.equal(opts.noAlt, true)
+  assert.equal(opts.snapshot, true)
 })
 
 test("accepts a youtube url as the target", () => {

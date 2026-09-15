@@ -1,7 +1,18 @@
 import type { FlatComment } from "./tree"
-
-const USER_AGENT =
-  "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
+import {
+  USER_AGENT,
+  ajaxContinuation,
+  asObject,
+  continuationOf,
+  extractYtCfg,
+  extractYtInitialData,
+  fetchYoutubeHtml,
+  findAll,
+  parseLikeCount,
+  runsToText,
+  tokenOf,
+  type Json,
+} from "./yt-core"
 
 const COMMENT_SECTION_IDS = new Set([
   "comments-section",
@@ -15,132 +26,6 @@ export type VideoComments = {
   channel: string
   thumbnailUrl: string
   comments: FlatComment[]
-}
-
-type Json = Record<string, unknown>
-
-function findAll(source: unknown, key: string): unknown[] {
-  const found: unknown[] = []
-  const walk = (node: unknown) => {
-    if (Array.isArray(node)) {
-      for (const item of node) walk(item)
-      return
-    }
-    if (node && typeof node === "object") {
-      for (const [k, v] of Object.entries(node as Json)) {
-        if (k === key) found.push(v)
-        walk(v)
-      }
-    }
-  }
-  walk(source)
-  return found
-}
-
-function parseBalancedObject(source: string, start: number): unknown {
-  let depth = 0
-  let inString = false
-  let escaped = false
-  for (let i = start; i < source.length; i++) {
-    const ch = source[i]
-    if (inString) {
-      if (escaped) escaped = false
-      else if (ch === "\\") escaped = true
-      else if (ch === '"') inString = false
-      continue
-    }
-    if (ch === '"') inString = true
-    else if (ch === "{") depth++
-    else if (ch === "}") {
-      depth--
-      if (depth === 0) return JSON.parse(source.slice(start, i + 1))
-    }
-  }
-  throw new Error("JSON 객체를 닫지 못했습니다.")
-}
-
-function extractYtCfg(html: string): Json {
-  let searchFrom = 0
-  while (searchFrom < html.length) {
-    const idx = html.indexOf("ytcfg.set(", searchFrom)
-    if (idx < 0) break
-    const start = html.indexOf("{", idx)
-    if (start < 0) break
-    try {
-      const parsed = parseBalancedObject(html, start) as Json
-      if (typeof parsed.INNERTUBE_API_KEY === "string") return parsed
-    } catch {
-      // Keep scanning later ytcfg.set calls.
-    }
-    searchFrom = idx + 10
-  }
-  throw new Error("유튜브 페이지에서 API 설정을 찾지 못했습니다.")
-}
-
-function extractYtInitialData(html: string): Json {
-  const markers = ['ytInitialData = ', 'ytInitialData=', 'ytInitialData"] = ']
-  for (const marker of markers) {
-    const idx = html.indexOf(marker)
-    if (idx < 0) continue
-    const start = html.indexOf("{", idx)
-    if (start < 0) continue
-    try {
-      return parseBalancedObject(html, start) as Json
-    } catch {
-      // Try the next marker.
-    }
-  }
-  throw new Error("영상 데이터를 읽지 못했습니다.")
-}
-
-function parseLikeCount(label: string): number {
-  const raw = label.replace(/,/g, "").trim()
-  if (!raw) return 0
-  const korean = raw.match(/^([\d.]+)\s*만$/)
-  if (korean) return Math.round(parseFloat(korean[1]) * 10_000)
-  const thousand = raw.match(/^([\d.]+)\s*천$/)
-  if (thousand) return Math.round(parseFloat(thousand[1]) * 1_000)
-  const k = raw.match(/^([\d.]+)\s*[kK]$/)
-  if (k) return Math.round(parseFloat(k[1]) * 1_000)
-  const m = raw.match(/^([\d.]+)\s*[mM]$/)
-  if (m) return Math.round(parseFloat(m[1]) * 1_000_000)
-  const n = parseInt(raw, 10)
-  return Number.isFinite(n) ? n : 0
-}
-
-function runsToText(value: unknown): string {
-  if (typeof value === "string") return value
-  if (!value || typeof value !== "object") return ""
-  const record = value as Json
-  if (typeof record.simpleText === "string") return record.simpleText
-  if (Array.isArray(record.runs)) {
-    return record.runs
-      .map((run) =>
-        run && typeof run === "object" && "text" in run
-          ? String((run as { text: unknown }).text ?? "")
-          : "",
-      )
-      .join("")
-  }
-  if (typeof record.content === "string") return record.content
-  return ""
-}
-
-function asObject(value: unknown): Json | null {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Json)
-    : null
-}
-
-function continuationOf(value: unknown): Json | null {
-  const obj = asObject(value)
-  if (!obj) return null
-  if (asObject(obj.continuationCommand)) return obj
-  if (obj.command) return continuationOf(obj.command)
-  if (asObject(obj.continuationEndpoint)) {
-    return continuationOf(obj.continuationEndpoint)
-  }
-  return null
 }
 
 function parseEntityComment(payload: unknown): FlatComment | null {
@@ -220,41 +105,6 @@ function extractChannel(data: unknown): string {
   return ""
 }
 
-async function ajaxRequest(endpoint: Json, ytcfg: Json): Promise<Json | null> {
-  const meta = asObject(endpoint.commandMetadata)
-  const web = asObject(meta?.webCommandMetadata)
-  const continuation = asObject(endpoint.continuationCommand)
-  const apiUrl = typeof web?.apiUrl === "string" ? web.apiUrl : "/youtubei/v1/next"
-  const token = typeof continuation?.token === "string" ? continuation.token : ""
-  const apiKey = typeof ytcfg.INNERTUBE_API_KEY === "string" ? ytcfg.INNERTUBE_API_KEY : ""
-  if (!token || !apiKey) return null
-
-  const url = new URL(`https://www.youtube.com${apiUrl}`)
-  url.searchParams.set("key", apiKey)
-  url.searchParams.set("prettyPrint", "false")
-
-  const context = asObject(ytcfg.INNERTUBE_CONTEXT) ?? {}
-  const client = asObject(context.client) ?? {}
-  client.hl = "ko"
-  client.gl = "KR"
-  context.client = client
-
-  const response = await fetch(url, {
-    method: "POST",
-    headers: {
-      "content-type": "application/json",
-      "user-agent": USER_AGENT,
-      "accept-language": "ko-KR,ko;q=0.9",
-      origin: "https://www.youtube.com",
-      referer: "https://www.youtube.com/",
-    },
-    body: JSON.stringify({ context, continuation: token }),
-  })
-
-  if (!response.ok) return null
-  return (await response.json()) as Json
-}
-
 async function fetchOEmbed(videoId: string): Promise<{
   title: string
   channel: string
@@ -317,15 +167,12 @@ function collectReplyEndpoints(data: unknown): { parentId: string; endpoint: Jso
   return out
 }
 
-function tokenOf(endpoint: Json): string {
-  return String(asObject(endpoint.continuationCommand)?.token ?? "")
-}
-
 export async function fetchVideoComments(options: {
   videoId: string
   sort: "popular" | "recent"
+  preview?: boolean
 }): Promise<VideoComments> {
-  const { videoId, sort } = options
+  const { videoId, sort, preview = false } = options
   const SAFETY_CAP = 50_000
   const REPLY_BATCH = 8
   const budgetMs = 270_000
@@ -341,27 +188,9 @@ export async function fetchVideoComments(options: {
     seenTokens.add(token)
     queue.push(endpoint)
   }
-  const watchUrl = `https://www.youtube.com/watch?v=${videoId}&hl=ko&gl=KR`
-  const page = await fetch(watchUrl, {
-    headers: {
-      "user-agent": USER_AGENT,
-      "accept-language": "ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7",
-      accept: "text/html,application/xhtml+xml",
-      cookie:
-        "CONSENT=YES+; SOCS=CAISNQgDEitib3FfaWRlbnRpdHlmcm9udGVuZHVpc2VydmVyXzIwMjQwODEzLjA3X3AxGgJlbiACGgYIgJnLsgY",
-    },
-    redirect: "follow",
-  })
-
-  if (!page.ok) {
-    throw new Error("유튜브 영상 페이지를 열지 못했습니다.")
-  }
-
-  const html = await page.text()
-  if (html.includes("consent.youtube.com") && !html.includes("ytInitialData")) {
-    throw new Error("유튜브 쿠키 동의 페이지에 막혔습니다. 잠시 후 다시 시도해 주세요.")
-  }
-
+  const html = await fetchYoutubeHtml(
+    `https://www.youtube.com/watch?v=${videoId}&hl=ko&gl=KR`,
+  )
   const ytcfg = extractYtCfg(html)
   const initial = extractYtInitialData(html)
   const oembed = await fetchOEmbed(videoId).catch(() => null)
@@ -381,7 +210,7 @@ export async function fetchVideoComments(options: {
       continuationOf(asObject(renderer)?.continuationEndpoint) ??
       continuationOf(findAll(initial, "continuationEndpoint")[0])
     if (first) {
-      const boot = await ajaxRequest(first, ytcfg)
+      const boot = await ajaxContinuation(first, ytcfg)
       if (boot) {
         collectComments(boot, collected)
         for (const item of collectReplyEndpoints(boot)) enqueue(item.endpoint, replyQueue)
@@ -403,7 +232,7 @@ export async function fetchVideoComments(options: {
     const endpoint = pageQueue.shift()
     if (!endpoint) break
 
-    const response = await ajaxRequest(endpoint, ytcfg)
+    const response = await ajaxContinuation(endpoint, ytcfg)
     if (!response) continue
 
     const error = findAll(response, "externalErrorMessage")[0]
@@ -412,17 +241,20 @@ export async function fetchVideoComments(options: {
     collectComments(response, collected)
     for (const item of collectReplyEndpoints(response)) enqueue(item.endpoint, replyQueue)
     for (const next of collectNextPageEndpoints(response)) enqueue(next, pageQueue)
+    if (preview) break
   }
 
+  if (!preview) {
   while (replyQueue.length && hasTime() && underCap()) {
     const batch = replyQueue.splice(0, REPLY_BATCH)
-    const responses = await Promise.all(batch.map((endpoint) => ajaxRequest(endpoint, ytcfg)))
+    const responses = await Promise.all(batch.map((endpoint) => ajaxContinuation(endpoint, ytcfg)))
     for (const response of responses) {
       if (!response) continue
       collectComments(response, collected)
       for (const item of collectReplyEndpoints(response)) enqueue(item.endpoint, replyQueue)
       for (const next of collectNextPageEndpoints(response)) enqueue(next, replyQueue)
     }
+  }
   }
 
   const comments = [...collected.values()]

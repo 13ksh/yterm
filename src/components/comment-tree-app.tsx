@@ -352,12 +352,12 @@ export function CommentTreeApp() {
 
       <p className="text-center text-xs leading-5 text-zinc-500">
         댓글은 불러올 때만 읽고, 서버에 저장하지 않습니다. 유튜브가 요청을 막으면
-        예시 트리로 형식을 확인할 수 있습니다. 터미널에서 영상을 보려면{" "}
+        예시 트리로 형식을 확인할 수 있습니다. CMD 피드는{" "}
         <code className="rounded bg-white/5 px-1 py-0.5 font-mono text-[11px] text-zinc-300">
-          npm run ascii -- --demo
+          yterm --demo
         </code>
         {" "}
-        (8 FPS 컬러 ASCII, 빨간 % 게이지).
+        (방향키는 목록만, Enter 재생).
       </p>
     </div>
   )

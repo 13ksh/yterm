@@ -1,5 +1,6 @@
 import { HELP, parseArgs } from "./args"
 import { play } from "./player"
+import { runTui } from "./tui"
 
 async function main(): Promise<void> {
   let opts
@@ -18,7 +19,8 @@ async function main(): Promise<void> {
   }
 
   try {
-    const code = await play(opts)
+    const direct = Boolean(opts.target) || opts.frames != null
+    const code = direct ? await play(opts) : await runTui(opts)
     process.exitCode = code
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)

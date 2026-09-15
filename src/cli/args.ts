@@ -6,6 +6,7 @@ export type CliOptions = {
   rows: number | null
   frames: number | null
   noAlt: boolean
+  snapshot: boolean
   target: string | null
 }
 
@@ -20,6 +21,7 @@ export function parseArgs(argv: string[]): CliOptions {
     rows: null,
     frames: null,
     noAlt: false,
+    snapshot: false,
     target: null,
   }
 
@@ -37,6 +39,10 @@ export function parseArgs(argv: string[]): CliOptions {
     }
     if (arg === "--no-alt") {
       opts.noAlt = true
+      continue
+    }
+    if (arg === "--snapshot") {
+      opts.snapshot = true
       continue
     }
 
@@ -110,26 +116,34 @@ function applyFlag(opts: CliOptions, name: string, raw: string): void {
   throw new Error(`알 수 없는 옵션 --${name}`)
 }
 
-export const HELP = `ASCII 유튜브 — 컬러 아스키 아트 플레이어
+export const HELP = `ASCII 유튜브 — CMD 피드 + 8FPS 컬러 아스키
 
-유튜브 주소를 받아 8FPS로 터미널에 그립니다. 유튜브는 파일을 저장하지 않고
-스트림 URL만 열어 ffmpeg가 프레임을 파이프합니다. 로컬 파일도 재생합니다.
+CMD에서 피드를 고르고, 선택한 영상만 재생합니다. 방향키는 커서를 옮길 뿐
+추천/댓글/다음 페이지를 그때그때 치지 않습니다.
 
 사용:
-  npm run ascii -- --demo
-  npm run ascii -- https://www.youtube.com/watch?v=VIDEO_ID
-  npm run ascii -- ./clip.mp4
+  yterm
+  yterm --demo
+  yterm https://www.youtube.com/watch?v=VIDEO_ID
+  npm run yterm -- --demo --snapshot
 
 조작:
-  space   일시정지 / 이어보기
+  ↑↓      목록 이동 (네트워크 없음)
+  Enter   재생 (8 FPS 컬러 ASCII)
+  → / r   이 영상의 추천만 로드
+  c       이 영상의 댓글 첫 페이지만 로드
+  /       검색
+  ←       뒤로
+  space   재생 중 일시정지
   q       종료
 
 옵션:
-  --demo          컬러 테스트 패턴 (네트워크 없이 확인)
+  --demo          예시 피드 (유튜브가 막을 때)
+  --snapshot      피드 한 화면만 출력하고 종료
   --fps 8         초당 프레임. 기본 8
   --cols 80       가로 칸 수
   --rows 24       세로 줄 수
-  --frames N      N프레임 후 자동 종료 (테스트용)
+  --frames N      N프레임 후 자동 종료 (직접 재생 테스트)
   --no-alt        대체 화면 버퍼를 쓰지 않음
   -h, --help      이 도움말
 `

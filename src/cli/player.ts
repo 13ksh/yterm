@@ -24,7 +24,12 @@ const ALT_OFF = "\x1b[?1049l"
 const WHITE = "\x1b[38;2;241;241;241m"
 const RESET = "\x1b[0m"
 
-export async function play(opts: CliOptions): Promise<number> {
+export type PlayHooks = {
+  ownedScreen?: boolean
+  onKey?: (handler: (key: string) => void) => () => void
+}
+
+export async function play(opts: CliOptions, hooks: PlayHooks = {}): Promise<number> {
   const cols =
     opts.cols ??
     process.stdout.columns ??
@@ -47,28 +52,17 @@ export async function play(opts: CliOptions): Promise<number> {
   const frameMs = 1000 / opts.fps
   let nextDue = 0
 
-  const restore = installTerminal(opts.noAlt, tty, (key) => {
+  const restore = installTerminal(opts.noAlt || Boolean(hooks.ownedScreen), tty, (key) => {
     if (key === "q" || key === "\u0003") {
       quitting = true
-      if (paused) {
-        try {
-          ffmpeg.kill("SIGCONT")
-        } catch {
-          /* ignore */
-        }
-      }
       ffmpeg.kill("SIGTERM")
       return
     }
     if (key === " ") {
       paused = !paused
-      if (paused) ffmpeg.kill("SIGSTOP")
-      else {
-        ffmpeg.kill("SIGCONT")
-        nextDue = performance.now()
-      }
+      nextDue = paused ? nextDue : performance.now()
     }
-  })
+  }, hooks)
 
   writeScreen(opts.noAlt)
   process.stdout.write(
@@ -111,11 +105,6 @@ export async function play(opts: CliOptions): Promise<number> {
     }
     return 0
   } finally {
-    try {
-      ffmpeg.kill("SIGCONT")
-    } catch {
-      /* ignore */
-    }
     if (!ffmpeg.killed) ffmpeg.kill("SIGTERM")
     restore()
   }
@@ -180,17 +169,21 @@ function installTerminal(
   noAlt: boolean,
   raw: boolean,
   onKey: (key: string) => void,
+  hooks: PlayHooks = {},
 ): () => void {
-  if (!noAlt) process.stdout.write(ALT_ON)
+  if (!noAlt && !hooks.ownedScreen) process.stdout.write(ALT_ON)
   process.stdout.write(HIDE)
 
   let rawOn = false
+  let unsub: (() => void) | null = null
   const onData = (buf: Buffer | string) => {
     const s = typeof buf === "string" ? buf : buf.toString("utf8")
     for (const ch of s) onKey(ch)
   }
 
-  if (raw && process.stdin.setRawMode) {
+  if (hooks.onKey) {
+    unsub = hooks.onKey(onKey)
+  } else if (raw && process.stdin.setRawMode) {
     process.stdin.setRawMode(true)
     rawOn = true
     process.stdin.resume()
@@ -207,6 +200,7 @@ function installTerminal(
     restored = true
     process.off("SIGINT", onSig)
     process.off("SIGTERM", onSig)
+    unsub?.()
     if (rawOn) {
       process.stdin.off("data", onData)
       try {
@@ -216,9 +210,11 @@ function installTerminal(
       }
       process.stdin.pause()
     }
-    process.stdout.write(SHOW)
-    if (!noAlt) process.stdout.write(ALT_OFF)
-    else process.stdout.write("\n")
+    if (!hooks.ownedScreen) {
+      process.stdout.write(SHOW)
+      if (!noAlt) process.stdout.write(ALT_OFF)
+      else process.stdout.write("\n")
+    }
   }
 }
 
