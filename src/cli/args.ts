@@ -9,6 +9,8 @@ export type CliOptions = {
   target: string | null
 }
 
+const VALUE_FLAGS = new Set(["fps", "cols", "width", "rows", "frames"])
+
 export function parseArgs(argv: string[]): CliOptions {
   const opts: CliOptions = {
     demo: false,
@@ -45,11 +47,15 @@ export function parseArgs(argv: string[]): CliOptions {
     }
 
     if (arg.startsWith("--")) {
+      const name = arg.slice(2)
+      if (!VALUE_FLAGS.has(name)) {
+        throw new Error(`알 수 없는 옵션 --${name}`)
+      }
       const value = argv[i + 1]
       if (value == null || value.startsWith("-")) {
         throw new Error(`옵션 ${arg} 뒤에 값이 필요합니다`)
       }
-      applyFlag(opts, arg.slice(2), value)
+      applyFlag(opts, name, value)
       i += 1
       continue
     }
@@ -106,8 +112,8 @@ function applyFlag(opts: CliOptions, name: string, raw: string): void {
 
 export const HELP = `ASCII 유튜브 — 컬러 아스키 아트 플레이어
 
-유튜브 주소를 받아 8FPS로 터미널에 그립니다. 영상 파일은 받지 않고
-스트림 URL만 열어 ffmpeg가 프레임을 파이프합니다.
+유튜브 주소를 받아 8FPS로 터미널에 그립니다. 유튜브는 파일을 저장하지 않고
+스트림 URL만 열어 ffmpeg가 프레임을 파이프합니다. 로컬 파일도 재생합니다.
 
 사용:
   npm run ascii -- --demo

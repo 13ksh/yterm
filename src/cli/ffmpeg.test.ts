@@ -37,10 +37,14 @@ test("ffmpeg color bar frame renders as truecolor half-blocks", () => {
     { encoding: "buffer", maxBuffer: 1024 * 1024 },
   )
   assert.equal(result.status, 0, result.stderr.toString())
-  assert.equal(result.stdout.length, 6 * 4 * 3)
+  assert.ok(result.stdout.length === 6 * 4 * 3)
+  const r = result.stdout[0]
+  const g = result.stdout[1]
+  const b = result.stdout[2]
+  assert.ok(r > 240 && g < 8 && b < 8, `expected red-ish pixel, got ${r},${g},${b}`)
   const art = renderAscii(result.stdout, 6, 4)
   assert.equal(art.split("\n").length, 2)
   assert.equal([...art].filter((ch) => ch === "▀").length, 12)
-  assert.match(art, /\x1b\[38;2;255;0;0m/)
-  assert.match(art, /\x1b\[48;2;255;0;0m/)
+  assert.match(art, new RegExp(`\\x1b\\[38;2;${r};${g};${b}m`))
+  assert.match(art, new RegExp(`\\x1b\\[48;2;${r};${g};${b}m`))
 })

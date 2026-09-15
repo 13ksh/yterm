@@ -1,6 +1,6 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process"
-import { Readable } from "node:stream"
 import { fitCanvas, frameByteSize, renderAscii } from "./ascii"
+import { ByteReader } from "./bytes"
 import {
   playheadRatio,
   renderGauge,
@@ -45,7 +45,7 @@ export async function play(opts: CliOptions): Promise<number> {
   let frameIndex = 0
   let lastFrame: Buffer | null = null
   const frameMs = 1000 / opts.fps
-  let nextDue = performance.now()
+  let nextDue = 0
 
   const restore = installTerminal(opts.noAlt, tty, (key) => {
     if (key === "q" || key === "\u0003") {
@@ -89,9 +89,15 @@ export async function play(opts: CliOptions): Promise<number> {
       if (!raw || raw.length < frameSize) break
 
       const now = performance.now()
-      const wait = nextDue - now
-      if (wait > 0) await sleep(wait)
-      if (now - nextDue > frameMs * 4) nextDue = performance.now()
+      if (nextDue === 0) {
+        nextDue = now
+      } else {
+        const wait = nextDue - now
+        if (wait > 0) await sleep(wait)
+        if (performance.now() - nextDue > frameMs * 4) {
+          nextDue = performance.now()
+        }
+      }
       nextDue += frameMs
 
       lastFrame = raw
@@ -223,60 +229,4 @@ function writeScreen(noAlt: boolean): void {
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms))
-}
-
-class ByteReader {
-  private leftover = Buffer.alloc(0)
-  private ended = false
-
-  constructor(private readonly stream: Readable) {
-    this.stream.on("end", () => {
-      this.ended = true
-    })
-  }
-
-  async read(size: number): Promise<Buffer | null> {
-    while (this.leftover.length < size) {
-      if (this.ended && this.leftover.length === 0) return null
-      if (this.ended) {
-        const last = this.leftover
-        this.leftover = Buffer.alloc(0)
-        return last
-      }
-      const chunk = await this.nextChunk()
-      if (chunk == null) {
-        this.ended = true
-        continue
-      }
-      this.leftover = Buffer.concat([this.leftover, chunk])
-    }
-    const out = this.leftover.subarray(0, size)
-    this.leftover = this.leftover.subarray(size)
-    return out
-  }
-
-  private nextChunk(): Promise<Buffer | null> {
-    return new Promise((resolve, reject) => {
-      const onData = (c: Buffer) => {
-        cleanup()
-        resolve(c)
-      }
-      const onEnd = () => {
-        cleanup()
-        resolve(null)
-      }
-      const onErr = (e: Error) => {
-        cleanup()
-        reject(e)
-      }
-      const cleanup = () => {
-        this.stream.off("data", onData)
-        this.stream.off("end", onEnd)
-        this.stream.off("error", onErr)
-      }
-      this.stream.once("data", onData)
-      this.stream.once("end", onEnd)
-      this.stream.once("error", onErr)
-    })
-  }
 }

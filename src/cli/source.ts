@@ -67,16 +67,27 @@ type YtJson = {
 
 async function resolveYoutube(target: string): Promise<PlaySource> {
   const ytdlp = findYtDlp()
-  const raw = await runCapture(ytdlp.cmd, [
-    ...ytdlp.prefix,
-    "-J",
-    "--no-playlist",
-    "--no-warnings",
-    "-f",
-    "b[height<=480]/b[height<=720]/b",
-    "--",
-    target,
-  ])
+  let raw: string
+  try {
+    raw = await runCapture(ytdlp.cmd, [
+      ...ytdlp.prefix,
+      "-J",
+      "--no-playlist",
+      "--no-warnings",
+      "-f",
+      "b[height<=480]/b[height<=720]/b",
+      "--",
+      target,
+    ])
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    if (/sign in|not a bot|cookies/i.test(message)) {
+      throw new Error(
+        "유튜브가 봇 확인을 요구합니다. 로컬 브라우저 쿠키를 yt-dlp에 넘기거나 --demo 로 플레이어를 확인하세요.",
+      )
+    }
+    throw err
+  }
   let parsed: YtJson
   try {
     parsed = JSON.parse(raw) as YtJson
