@@ -19,7 +19,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
-import { Switch } from "@/components/ui/switch"
 import { TreeView } from "@/components/tree-view"
 import { DEMO_COMMENTS, DEMO_TITLE } from "@/lib/demo"
 import {
@@ -67,8 +66,19 @@ function ToggleChip({
       onClick={onToggle}
       className="flex h-8 items-center gap-2 rounded-lg border border-white/10 px-2.5 text-sm text-zinc-300 hover:bg-white/5"
     >
-      <span className="pointer-events-none">
-        <Switch checked={pressed} size="sm" />
+      <span
+        aria-hidden
+        className={cn(
+          "relative inline-flex h-3.5 w-6 shrink-0 rounded-full border border-transparent transition-colors",
+          pressed ? "bg-primary" : "bg-input",
+        )}
+      >
+        <span
+          className={cn(
+            "absolute top-0.5 size-2.5 rounded-full bg-background transition-transform",
+            pressed ? "translate-x-3" : "translate-x-0.5",
+          )}
+        />
       </span>
       {children}
     </button>
