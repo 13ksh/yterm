@@ -53,7 +53,12 @@ export function TreeView({
                 {parsed.author ? (
                   <span className="font-medium text-rose-300">{parsed.author}</span>
                 ) : null}
-                <span className="text-zinc-200">{parsed.text}</span>
+                <span className="text-zinc-200">{parsed.text.replace(/ · .+$/, "")}</span>
+                {parsed.text.includes(" · ") ? (
+                  <span className="text-amber-200/80">
+                    {parsed.text.slice(parsed.text.lastIndexOf(" · "))}
+                  </span>
+                ) : null}
               </>
             )}
           </div>

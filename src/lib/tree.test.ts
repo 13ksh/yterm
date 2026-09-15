@@ -34,6 +34,16 @@ test("without mention nesting, replies stay one level deep", () => {
   assert.equal(hsh.replies[3].text, "@licen 왜 시비임")
 })
 
+test("likes appear after the comment text when enabled", () => {
+  const forest = buildForest(DEMO_COMMENTS, true)
+  const tree = renderTree(DEMO_TITLE, forest, {
+    nestMentions: true,
+    showLikes: true,
+  })
+  assert.match(tree, /├─@hsh 이거 진짜임 · 128/)
+  assert.match(tree, /│  │  └─@hsh 왜 시비임 · 31/)
+})
+
 test("leading invisible characters still nest @mentions", () => {
   const forest = buildForest(
     [

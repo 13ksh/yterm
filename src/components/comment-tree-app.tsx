@@ -1,6 +1,6 @@
 "use client"
 
-import { useMemo, useState } from "react"
+import { useMemo, useRef, useState } from "react"
 import {
   CheckIcon,
   CopyIcon,
@@ -61,6 +61,8 @@ export function CommentTreeApp() {
   const [error, setError] = useState<string | null>(null)
   const [copied, setCopied] = useState(false)
   const [video, setVideo] = useState<LoadedVideo>(DEMO_VIDEO)
+  const urlRef = useRef<HTMLInputElement>(null)
+  const loadingRef = useRef(false)
 
   const forest = useMemo(
     () => buildForest(video.comments, nestMentions),
@@ -82,7 +84,9 @@ export function CommentTreeApp() {
       toast.error("유튜브 영상 주소를 붙여 넣어 주세요.")
       return
     }
+    if (loadingRef.current) return
 
+    loadingRef.current = true
     setLoading(true)
     setError(null)
     try {
@@ -113,8 +117,16 @@ export function CommentTreeApp() {
       setError(message)
       toast.error(message)
     } finally {
+      loadingRef.current = false
       setLoading(false)
     }
+  }
+
+  function submitFromEvent(event?: { preventDefault(): void }) {
+    event?.preventDefault()
+    const typed = urlRef.current?.value || url
+    setUrl(typed)
+    void loadComments(typed)
   }
 
   function loadDemo() {
@@ -171,22 +183,28 @@ export function CommentTreeApp() {
         </div>
       </header>
 
-      <form
-        className="rounded-2xl border border-white/10 bg-card/80 p-3 shadow-sm backdrop-blur sm:p-4"
-        onSubmit={(event) => {
-          event.preventDefault()
-          void loadComments(url)
-        }}
-      >
-        <div className="flex flex-col gap-3 sm:flex-row">
+      <div className="rounded-2xl border border-white/10 bg-card/80 p-3 shadow-sm backdrop-blur sm:p-4">
+        <form
+          className="flex flex-col gap-3 sm:flex-row"
+          onSubmit={submitFromEvent}
+        >
           <Input
+            ref={urlRef}
+            name="url"
             value={url}
-            onChange={(event) => setUrl(event.target.value)}
+            onValueChange={setUrl}
+            onChange={(event) => setUrl(event.currentTarget.value)}
             placeholder="https://www.youtube.com/watch?v=..."
             aria-label="유튜브 영상 주소"
             className="h-10 flex-1 bg-black/20 text-sm"
           />
-          <Button type="submit" className="h-10 px-4" disabled={loading}>
+          <Button
+            type="submit"
+            nativeButton
+            className="h-10 px-4"
+            disabled={loading}
+            onClick={submitFromEvent}
+          >
             {loading ? (
               <Loader2Icon className="animate-spin" data-icon="inline-start" />
             ) : (
@@ -194,7 +212,7 @@ export function CommentTreeApp() {
             )}
             {loading ? "불러오는 중" : "트리 만들기"}
           </Button>
-        </div>
+        </form>
 
         <div className="mt-4 flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-center">
           <Select
@@ -228,21 +246,25 @@ export function CommentTreeApp() {
             </SelectContent>
           </Select>
 
-          <label className="flex h-8 items-center gap-2 rounded-lg border border-white/10 px-2.5 text-sm text-zinc-300">
+          <div className="flex h-8 items-center gap-2 rounded-lg border border-white/10 px-2.5 text-sm text-zinc-300">
             <Switch
               checked={nestMentions}
               onCheckedChange={setNestMentions}
               size="sm"
             />
             @멘션으로 묶기
-          </label>
+          </div>
 
-          <label className="flex h-8 items-center gap-2 rounded-lg border border-white/10 px-2.5 text-sm text-zinc-300">
-            <Switch checked={showLikes} onCheckedChange={setShowLikes} size="sm" />
+          <div className="flex h-8 items-center gap-2 rounded-lg border border-white/10 px-2.5 text-sm text-zinc-300">
+            <Switch
+              checked={showLikes}
+              onCheckedChange={setShowLikes}
+              size="sm"
+            />
             좋아요 표시
-          </label>
+          </div>
         </div>
-      </form>
+      </div>
 
       {error ? (
         <div
