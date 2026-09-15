@@ -1,0 +1,322 @@
+"use client"
+
+import { useMemo, useState } from "react"
+import {
+  CheckIcon,
+  CopyIcon,
+  DownloadIcon,
+  ListTreeIcon,
+  Loader2Icon,
+  SparklesIcon,
+} from "lucide-react"
+import { toast } from "sonner"
+import { Badge } from "@/components/ui/badge"
+import { Button } from "@/components/ui/button"
+import { Input } from "@/components/ui/input"
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select"
+import { Switch } from "@/components/ui/switch"
+import { TreeView } from "@/components/tree-view"
+import { DEMO_COMMENTS, DEMO_TITLE } from "@/lib/demo"
+import {
+  buildForest,
+  countNodes,
+  renderTree,
+  type FlatComment,
+} from "@/lib/tree"
+import { parseVideoId } from "@/lib/video-id"
+
+type SortMode = "popular" | "recent"
+type Source = "demo" | "youtube"
+
+type LoadedVideo = {
+  source: Source
+  title: string
+  channel: string
+  thumbnailUrl: string
+  comments: FlatComment[]
+  videoId?: string
+}
+
+const DEMO_VIDEO: LoadedVideo = {
+  source: "demo",
+  title: DEMO_TITLE,
+  channel: "예시 댓글",
+  thumbnailUrl: "",
+  comments: DEMO_COMMENTS,
+}
+
+export function CommentTreeApp() {
+  const [url, setUrl] = useState("")
+  const [sort, setSort] = useState<SortMode>("popular")
+  const [maxComments, setMaxComments] = useState("40")
+  const [nestMentions, setNestMentions] = useState(true)
+  const [showLikes, setShowLikes] = useState(false)
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [copied, setCopied] = useState(false)
+  const [video, setVideo] = useState<LoadedVideo>(DEMO_VIDEO)
+
+  const forest = useMemo(
+    () => buildForest(video.comments, nestMentions),
+    [video.comments, nestMentions],
+  )
+  const treeText = useMemo(
+    () =>
+      renderTree(video.title, forest, {
+        nestMentions,
+        showLikes,
+      }),
+    [forest, nestMentions, showLikes, video.title],
+  )
+  const total = countNodes(forest)
+
+  async function loadComments(nextUrl: string) {
+    const videoId = parseVideoId(nextUrl)
+    if (!videoId) {
+      toast.error("유튜브 영상 주소를 붙여 넣어 주세요.")
+      return
+    }
+
+    setLoading(true)
+    setError(null)
+    try {
+      const response = await fetch("/api/comments", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          url: nextUrl,
+          sort,
+          maxComments: Number(maxComments),
+        }),
+      })
+      const data = (await response.json()) as LoadedVideo & { error?: string }
+      if (!response.ok) {
+        throw new Error(data.error || "댓글을 불러오지 못했습니다.")
+      }
+      setVideo({
+        source: "youtube",
+        title: data.title,
+        channel: data.channel,
+        thumbnailUrl: data.thumbnailUrl,
+        comments: data.comments,
+        videoId,
+      })
+      toast.success("댓글 트리를 만들었습니다.")
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "불러오기에 실패했습니다."
+      setError(message)
+      toast.error(message)
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  function loadDemo() {
+    setVideo(DEMO_VIDEO)
+    setError(null)
+    setUrl("")
+    toast.message("예시 트리를 열었습니다.")
+  }
+
+  async function copyTree() {
+    try {
+      await navigator.clipboard.writeText(treeText)
+      setCopied(true)
+      toast.success("트리를 복사했습니다.")
+      window.setTimeout(() => setCopied(false), 1600)
+    } catch {
+      toast.error("복사에 실패했습니다. 텍스트를 직접 선택해 주세요.")
+    }
+  }
+
+  function downloadTree() {
+    const blob = new Blob([treeText], { type: "text/plain;charset=utf-8" })
+    const href = URL.createObjectURL(blob)
+    const safeName = video.title.replace(/[\\/:*?"<>|]/g, " ").slice(0, 60).trim()
+    const link = document.createElement("a")
+    link.href = href
+    link.download = `${safeName || "댓글나무"}.txt`
+    link.click()
+    URL.revokeObjectURL(href)
+  }
+
+  return (
+    <div className="mx-auto flex w-full max-w-5xl flex-1 flex-col gap-6 px-4 py-8 sm:px-6 sm:py-10">
+      <header className="flex flex-col gap-3">
+        <div className="flex items-center gap-2 text-rose-300">
+          <ListTreeIcon className="size-5" />
+          <p className="text-sm font-medium tracking-wide">댓글나무</p>
+        </div>
+        <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
+          <div className="max-w-2xl">
+            <h1 className="text-3xl font-semibold tracking-tight text-zinc-50 sm:text-4xl">
+              유튜브 댓글을 트리로
+            </h1>
+            <p className="mt-2 text-sm leading-6 text-zinc-400 sm:text-base">
+              영상 주소를 넣으면 댓글과 대댓글을{" "}
+              <span className="font-mono text-zinc-200">├─ @닉네임</span> 형태로
+              정리합니다. @멘션은 한 단계 더 안으로 묶습니다.
+            </p>
+          </div>
+          <Button type="button" variant="outline" onClick={loadDemo}>
+            <SparklesIcon data-icon="inline-start" />
+            예시 보기
+          </Button>
+        </div>
+      </header>
+
+      <form
+        className="rounded-2xl border border-white/10 bg-card/80 p-3 shadow-sm backdrop-blur sm:p-4"
+        onSubmit={(event) => {
+          event.preventDefault()
+          void loadComments(url)
+        }}
+      >
+        <div className="flex flex-col gap-3 sm:flex-row">
+          <Input
+            value={url}
+            onChange={(event) => setUrl(event.target.value)}
+            placeholder="https://www.youtube.com/watch?v=..."
+            aria-label="유튜브 영상 주소"
+            className="h-10 flex-1 bg-black/20 text-sm"
+          />
+          <Button type="submit" className="h-10 px-4" disabled={loading}>
+            {loading ? (
+              <Loader2Icon className="animate-spin" data-icon="inline-start" />
+            ) : (
+              <ListTreeIcon data-icon="inline-start" />
+            )}
+            {loading ? "불러오는 중" : "트리 만들기"}
+          </Button>
+        </div>
+
+        <div className="mt-4 flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-center">
+          <Select
+            value={sort}
+            onValueChange={(value) => {
+              if (value === "popular" || value === "recent") setSort(value)
+            }}
+          >
+            <SelectTrigger className="h-8 w-full sm:w-36">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent alignItemWithTrigger={false} align="start">
+              <SelectItem value="popular">인기 댓글</SelectItem>
+              <SelectItem value="recent">최신 댓글</SelectItem>
+            </SelectContent>
+          </Select>
+
+          <Select
+            value={maxComments}
+            onValueChange={(value) => {
+              if (value) setMaxComments(String(value))
+            }}
+          >
+            <SelectTrigger className="h-8 w-full sm:w-32">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent alignItemWithTrigger={false} align="start">
+              <SelectItem value="20">댓글 20개</SelectItem>
+              <SelectItem value="40">댓글 40개</SelectItem>
+              <SelectItem value="80">댓글 80개</SelectItem>
+            </SelectContent>
+          </Select>
+
+          <label className="flex h-8 items-center gap-2 rounded-lg border border-white/10 px-2.5 text-sm text-zinc-300">
+            <Switch
+              checked={nestMentions}
+              onCheckedChange={setNestMentions}
+              size="sm"
+            />
+            @멘션으로 묶기
+          </label>
+
+          <label className="flex h-8 items-center gap-2 rounded-lg border border-white/10 px-2.5 text-sm text-zinc-300">
+            <Switch checked={showLikes} onCheckedChange={setShowLikes} size="sm" />
+            좋아요 표시
+          </label>
+        </div>
+      </form>
+
+      {error ? (
+        <div
+          role="alert"
+          className="rounded-xl border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive"
+        >
+          {error} 아래 예시 트리로 형식을 먼저 볼 수 있습니다.
+        </div>
+      ) : null}
+
+      <section className="overflow-hidden rounded-2xl border border-white/10 bg-[#12100e] shadow-[0_20px_80px_-40px_rgba(0,0,0,0.8)]">
+        <div className="flex flex-col gap-3 border-b border-white/10 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
+          <div className="flex min-w-0 items-center gap-3">
+            {video.thumbnailUrl ? (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img
+                src={video.thumbnailUrl}
+                alt=""
+                className="size-10 shrink-0 rounded-md object-cover"
+              />
+            ) : (
+              <div className="flex size-10 shrink-0 items-center justify-center rounded-md bg-white/5 text-rose-300">
+                <ListTreeIcon className="size-4" />
+              </div>
+            )}
+            <div className="min-w-0">
+              <div className="flex items-center gap-2">
+                <p className="truncate text-sm font-medium text-zinc-100">
+                  {video.title}
+                </p>
+                <Badge variant="outline">
+                  {video.source === "demo" ? "예시" : "유튜브"}
+                </Badge>
+              </div>
+              <p className="truncate text-xs text-zinc-500">
+                {video.channel ? `${video.channel} · ` : ""}댓글 {forest.length}개
+                {total !== forest.length ? ` · 대댓글 포함 ${total}` : ""}
+              </p>
+            </div>
+          </div>
+          <div className="flex gap-2">
+            <Button type="button" variant="outline" size="sm" onClick={copyTree}>
+              {copied ? <CheckIcon /> : <CopyIcon />}
+              {copied ? "복사됨" : "복사"}
+            </Button>
+            <Button type="button" variant="outline" size="sm" onClick={downloadTree}>
+              <DownloadIcon />
+              .txt
+            </Button>
+          </div>
+        </div>
+
+        {loading ? (
+          <div className="space-y-2 p-5 font-mono text-sm text-zinc-600">
+            <div className="h-4 w-48 animate-pulse rounded bg-white/8" />
+            <div className="h-4 w-72 animate-pulse rounded bg-white/6" />
+            <div className="h-4 w-64 animate-pulse rounded bg-white/6" />
+            <div className="h-4 w-80 animate-pulse rounded bg-white/5" />
+            <div className="h-4 w-56 animate-pulse rounded bg-white/5" />
+            <p className="pt-3 text-xs text-zinc-500">댓글을 읽고 트리를 그리는 중…</p>
+          </div>
+        ) : forest.length === 0 ? (
+          <div className="px-5 py-16 text-center text-sm text-zinc-500">
+            표시할 댓글이 없습니다.
+          </div>
+        ) : (
+          <TreeView text={treeText} />
+        )}
+      </section>
+
+      <p className="text-center text-xs leading-5 text-zinc-500">
+        댓글은 불러올 때만 읽고, 서버에 저장하지 않습니다. 유튜브가 요청을 막으면
+        예시 트리로 형식을 확인할 수 있습니다.
+      </p>
+    </div>
+  )
+}
