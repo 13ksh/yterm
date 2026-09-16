@@ -4,24 +4,14 @@ chcp 65001 >nul
 title yterm 설치
 
 REM GitHub + curl 로 CMD 에서 바로 설치
-REM   curl -L -o %TEMP%\yterm-install.cmd https://raw.githubusercontent.com/계정/저장소/main/install.cmd
-REM   %TEMP%\yterm-install.cmd 계정/저장소
+REM   curl -L -o %TEMP%\yterm-install.cmd https://raw.githubusercontent.com/13ksh/yterm/main/install.cmd
+REM   %TEMP%\yterm-install.cmd
 
 set "REPO=%~1"
 if "%REPO%"=="" set "REPO=%YTERM_GITHUB%"
+if "%REPO%"=="" set "REPO=13ksh/yterm"
 
 if /I "%REPO%"=="--local" goto LOCAL
-if "%REPO%"=="" (
-  echo.
-  echo  GitHub 저장소가 필요합니다.
-  echo    install.cmd 내계정/저장소
-  echo.
-  echo  GitHub 에서 Create repo 한 뒤, 그 주소의 계정/이름을 넣으세요.
-  echo  이미 이 폴더를 받았다면:
-  echo    install.cmd --local
-  echo.
-  exit /b 1
-)
 
 where git >nul 2>&1
 if errorlevel 1 (

@@ -2,11 +2,11 @@
 set -euo pipefail
 
 # GitHub + curl:
-#   curl -fsSL https://raw.githubusercontent.com/USER/REPO/main/install.sh | bash -s -- USER/REPO
+#   curl -fsSL https://raw.githubusercontent.com/13ksh/yterm/main/install.sh | bash
 # Already cloned:
 #   ./install.sh --local
 
-REPO="${1:-${YTERM_GITHUB:-}}"
+REPO="${1:-${YTERM_GITHUB:-13ksh/yterm}}"
 DEST="${YTERM_HOME:-$HOME/.local/share/yterm}"
 BIN="${YTERM_BIN:-$HOME/.local/bin}"
 
@@ -15,7 +15,7 @@ if [[ "${REPO}" == "--local" ]]; then
 else
   if [[ -z "${REPO}" ]]; then
     echo "GitHub 저장소가 필요합니다."
-    echo "  curl -fsSL https://raw.githubusercontent.com/계정/저장소/main/install.sh | bash -s -- 계정/저장소"
+    echo "  curl -fsSL https://raw.githubusercontent.com/13ksh/yterm/main/install.sh | bash"
     echo "이 폴더에 이미 있다면: ./install.sh --local"
     exit 1
   fi

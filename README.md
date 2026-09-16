@@ -6,11 +6,9 @@
 
 ## CMD 설치 (GitHub + curl)
 
-GitHub에 저장소를 만든 뒤 (`Create repo`), `계정/저장소` 를 넣습니다.
-
 ```bat
-curl -L -o %TEMP%\yterm-install.cmd https://raw.githubusercontent.com/계정/저장소/main/install.cmd
-%TEMP%\yterm-install.cmd 계정/저장소
+curl -L -o %TEMP%\yterm-install.cmd https://raw.githubusercontent.com/13ksh/yterm/main/install.cmd
+%TEMP%\yterm-install.cmd
 yterm
 ```
 
@@ -24,7 +22,7 @@ yterm --demo
 macOS / Linux:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/계정/저장소/main/install.sh | bash -s -- 계정/저장소
+curl -fsSL https://raw.githubusercontent.com/13ksh/yterm/main/install.sh | bash
 yterm --demo
 ```
 
