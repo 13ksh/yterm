@@ -28,7 +28,15 @@ yterm --demo
 
 필요: Node.js 20+, git, 재생 시 `ffmpeg`. 유튜브 스트림은 `yt-dlp` (설치 스크립트가 있으면 같이 넣습니다).
 
-새 CMD 창은 UTF-8 (`chcp 65001`) 로 열립니다. `yterm` 을 못 찾으면 `C:\Users\내계정\yterm.cmd` 를 실행하세요.
+설치 스크립트는 **영문 CMD** 입니다. 한글이 섞이면 Windows가 명령을 잘라 먹습니다.
+
+`yterm` 을 못 찾으면 **새 CMD 창**을 열거나 이걸 실행하세요:
+
+```bat
+%LOCALAPPDATA%\yterm\yterm.cmd --demo
+```
+
+재생에는 `ffmpeg` 가 필요합니다: `winget install Gyan.FFmpeg`
 
 ## 터미널 조작
 
