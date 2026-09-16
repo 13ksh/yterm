@@ -52,10 +52,14 @@ try {
 }
 
 Write-Host "[3/4] launcher"
+try {
+  reg add HKCU\Console /v VirtualTerminalLevel /t REG_DWORD /d 1 /f | Out-Null
+} catch { }
 $shim = Join-Path $dest "yterm.cmd"
 @"
 @echo off
 chcp 65001 >nul
+reg add HKCU\Console /v VirtualTerminalLevel /t REG_DWORD /d 1 /f >nul 2>&1
 "$node" "$dest\bin\yterm.js" %*
 "@ | Set-Content -Path $shim -Encoding Ascii
 

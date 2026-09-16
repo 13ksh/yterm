@@ -1,8 +1,4 @@
-import {
-  visibleWindow,
-  type ListState,
-  type VideoItem,
-} from "../lib/youtube-catalog"
+import { visibleWindow, type ListState } from "../lib/youtube-catalog"
 import { truncateTitle } from "./gauge"
 import { buildForest, renderTree, type FlatComment } from "../lib/tree"
 
@@ -12,6 +8,7 @@ const WHITE = "\x1b[38;2;241;241;241m"
 const DIM = "\x1b[38;2;140;140;140m"
 const HILITE_BG = "\x1b[48;2;40;0;0m"
 const HILITE_FG = "\x1b[38;2;255;255;255m"
+const LINE = "─"
 
 export type TuiView = "feed" | "related" | "comments" | "search"
 
@@ -29,19 +26,63 @@ export type TuiModel = {
   rows: number
 }
 
+export function visibleLineCount(text: string): number {
+  if (!text) return 0
+  return text.split("\n").length
+}
+
+export function clampScreen(lines: string[], rows: number, cols: number): string {
+  const out: string[] = []
+  for (const line of lines) {
+    if (out.length >= rows) break
+    out.push(padLine(line, cols))
+  }
+  while (out.length < rows) out.push(" ".repeat(cols))
+  return out.slice(0, rows).join("\n")
+}
+
+export function commentLines(
+  comments: FlatComment[],
+  title: string,
+  width: number,
+): string[] {
+  if (comments.length === 0) {
+    return ["c 키 = 이 영상 댓글창", "방향키로는 댓글을 안 불러옵니다"]
+  }
+  const forest = buildForest(comments, true)
+  return renderTree(title || "댓글", forest, {
+    nestMentions: true,
+    showLikes: true,
+  })
+    .split("\n")
+    .map((line) => clipWidth(line, width))
+}
+
 export function renderTui(model: TuiModel): string {
   const cols = Math.max(40, model.cols)
-  const rows = Math.max(12, model.rows)
+  const rows = Math.max(10, model.rows)
   const header = renderHeader(model, cols)
   const footer = renderFooter(model, cols)
-  const bodyRows = rows - 4
-  const body =
-    model.view === "comments"
-      ? renderComments(model, cols, bodyRows)
-      : renderList(model.list, cols, bodyRows, model.composing ? model.query : null)
-  const status = padLine(`${DIM}${truncateTitle(model.status, cols)}${RESET}`, cols)
-  const lines = [header, body, status, footer]
-  return lines.join("\n")
+  const status = `${DIM}${truncateTitle(model.status, cols)}${RESET}`
+  const commentH = Math.max(4, Math.min(8, Math.floor(rows * 0.32)))
+  const listH = Math.max(4, rows - commentH - 3)
+  const list = renderListLines(
+    model.list,
+    cols,
+    listH,
+    model.composing ? model.query : null,
+  )
+  const cWidth = Math.max(16, cols - 2)
+  const allComments = commentLines(model.comments, model.commentTitle, cWidth)
+  const maxOff = Math.max(0, allComments.length - (commentH - 1))
+  const off = Math.min(Math.max(0, model.commentOffset), maxOff)
+  const cHead = `${RED}댓글창${RESET} ${DIM}${model.comments.length ? `${model.comments.length}개` : "비어 있음 · c"}${RESET}`
+  const cBody = allComments.slice(off, off + commentH - 1)
+  const commentsBlock = [cHead, ...cBody]
+  while (commentsBlock.length < commentH) commentsBlock.push("")
+
+  const lines = [header, ...list, ...commentsBlock, status, footer]
+  return clampScreen(lines, rows, cols)
 }
 
 function renderHeader(model: TuiModel, cols: number): string {
@@ -51,109 +92,85 @@ function renderHeader(model: TuiModel, cols: number): string {
       ? "피드"
       : model.view === "related"
         ? "추천"
-        : model.view === "comments"
-          ? "댓글"
-          : model.composing
-            ? `검색 입력: ${model.query}_`
+        : model.view === "search"
+          ? model.composing
+            ? `검색: ${model.query}_`
             : model.list.title
-  const left = `${RED}▶${RESET} ${WHITE}ASCII 유튜브${RESET}  ${DIM}${tag}${RESET}  ${title}`
-  return padLine(left, cols)
+          : model.list.title
+  return `${RED}▶${RESET} ${WHITE}ASCII 유튜브${RESET}  ${DIM}${tag}${RESET}  ${title}`
 }
 
 function renderFooter(model: TuiModel, cols: number): string {
-  const text =
-    model.composing
-      ? "Enter 검색  ·  Esc 취소"
-      : model.view === "comments"
-        ? "↑↓ 스크롤  ·  ← 뒤로  ·  Enter 재생  ·  q 종료"
-        : "↑↓ 이동  ·  Enter 재생  ·  → 추천  ·  c 댓글  ·  / 검색  ·  ← 뒤로  ·  q 종료"
-  return padLine(`${DIM}${truncateTitle(text, cols)}${RESET}`, cols)
+  const text = model.composing
+    ? "Enter 검색  ·  Esc 취소"
+    : "↑↓ 영상  ·  Enter 재생  ·  c 댓글창  ·  [ ] 댓글스크롤  ·  → 추천  ·  q 종료"
+  return `${DIM}${truncateTitle(text, cols)}${RESET}`
 }
 
-function renderList(
+function renderListLines(
   list: ListState,
   cols: number,
   rows: number,
   composingQuery: string | null,
-): string {
+): string[] {
   if (list.loading && list.items.length === 0) {
-    return center("불러오는 중… 방향키로는 요청하지 않습니다", cols, rows)
+    return padBlock(["불러오는 중…"], cols, rows)
   }
   if (list.items.length === 0) {
     const empty =
       composingQuery != null && composingQuery.length === 0
         ? "검색어를 입력하세요"
         : "목록이 비었습니다"
-    return center(empty, cols, rows)
+    return padBlock([empty], cols, rows)
   }
   const { slice, selectedInView, offset } = visibleWindow(list, rows)
   const lines = slice.map((item, i) =>
     renderRow(item, cols, i === selectedInView, offset + i + 1),
   )
-  while (lines.length < rows) lines.push(" ".repeat(cols))
-  return lines.join("\n")
+  return padBlock(lines, cols, rows)
 }
 
 function renderRow(
-  item: VideoItem,
+  item: { title: string; channel: string; duration: string },
   cols: number,
   selected: boolean,
   index: number,
 ): string {
-  const marker = selected ? `${RED}▶${RESET}` : " "
+  const marker = selected ? "▶" : " "
   const num = String(index).padStart(2, " ")
   const dur = item.duration ? ` ${item.duration}` : ""
   const channel = item.channel ? `  ${item.channel}` : ""
-  const main = `${marker} ${num} ${item.title}${dur}`
-  const rest = cols - visibleLen(main) - visibleLen(channel)
-  const title = rest < 0 ? truncateAnsi(main, cols) : main + " ".repeat(rest) + DIM + channel + RESET
-  if (selected) return `${HILITE_BG}${HILITE_FG}${stripForHilite(title, cols)}${RESET}`
-  return padLine(title, cols)
+  const plain = `${marker} ${num} ${item.title}${dur}${channel}`
+  const clipped = clipWidth(plain, cols)
+  if (selected) return `${HILITE_BG}${HILITE_FG}${clipped.padEnd(cols, " ")}${RESET}`
+  return `${WHITE}${clipped}${RESET}`
 }
 
-function renderComments(model: TuiModel, cols: number, rows: number): string {
-  if (model.comments.length === 0) {
-    return center("댓글이 없거나 아직 불러오지 않았습니다", cols, rows)
-  }
-  const forest = buildForest(model.comments, true)
-  const tree = renderTree(model.commentTitle || "댓글", forest, {
-    nestMentions: true,
-    showLikes: true,
-  }).split("\n")
-  const maxOffset = Math.max(0, tree.length - rows)
-  const offset = Math.min(model.commentOffset, maxOffset)
-  const slice = tree.slice(offset, offset + rows).map((line) =>
-    padLine(`${WHITE}${truncateTitle(line, cols)}${RESET}`, cols),
-  )
-  while (slice.length < rows) slice.push(" ".repeat(cols))
-  return slice.join("\n")
+function padBlock(lines: string[], cols: number, rows: number): string[] {
+  const out = lines.slice(0, rows)
+  while (out.length < rows) out.push("")
+  return out.slice(0, rows)
 }
 
-function center(text: string, cols: number, rows: number): string {
-  const line = padLine(`${DIM}${truncateTitle(text, cols)}${RESET}`, cols)
-  const out: string[] = []
-  const mid = Math.floor(rows / 2)
-  for (let i = 0; i < rows; i++) out.push(i === mid ? line : " ".repeat(cols))
-  return out.join("\n")
+function clipWidth(text: string, width: number): string {
+  if (width <= 0) return ""
+  if (text.length <= width) return text
+  if (width === 1) return "…"
+  return `${text.slice(0, width - 1)}…`
 }
 
-function visibleLen(text: string): number {
+export function visibleLen(text: string): number {
   return text.replace(/\x1b\[[0-9;]*m/g, "").length
 }
 
 function padLine(text: string, cols: number): string {
   const len = visibleLen(text)
-  if (len >= cols) return truncateAnsi(text, cols)
+  if (len === cols) return text
+  if (len > cols) {
+    const plain = text.replace(/\x1b\[[0-9;]*m/g, "")
+    return `${clipWidth(plain, cols)}${RESET}`
+  }
   return text + " ".repeat(cols - len)
 }
 
-function truncateAnsi(text: string, cols: number): string {
-  const plain = text.replace(/\x1b\[[0-9;]*m/g, "")
-  if (plain.length <= cols) return text + RESET
-  return `${truncateTitle(plain, cols)}${RESET}`
-}
-
-function stripForHilite(text: string, cols: number): string {
-  const plain = text.replace(/\x1b\[[0-9;]*m/g, "")
-  return truncateTitle(plain, cols).padEnd(cols, " ")
-}
+void LINE

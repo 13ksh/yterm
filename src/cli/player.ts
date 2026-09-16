@@ -8,12 +8,14 @@ import {
   truncateTitle,
 } from "./gauge"
 import type { CliOptions } from "./args"
+import { clampScreen } from "./screen"
 import {
   ffmpegRawArgs,
   findFfmpeg,
   resolveSource,
   type PlaySource,
 } from "./source"
+import { enableVt, termSize } from "./vt"
 
 const HOME = "\x1b[H"
 const CLEAR = "\x1b[2J"
@@ -27,18 +29,16 @@ const RESET = "\x1b[0m"
 export type PlayHooks = {
   ownedScreen?: boolean
   onKey?: (handler: (key: string) => void) => () => void
+  comments?: string[]
 }
 
 export async function play(opts: CliOptions, hooks: PlayHooks = {}): Promise<number> {
-  const cols =
-    opts.cols ??
-    process.stdout.columns ??
-    80
-  const rows =
-    opts.rows ??
-    process.stdout.rows ??
-    24
-  const { width, height } = fitCanvas(cols, rows)
+  enableVt()
+  const { cols, rows } = termSize(opts.cols, opts.rows)
+  const comments = hooks.comments ?? []
+  const commentH = comments.length > 0 ? Math.max(5, Math.min(8, Math.floor(rows * 0.3))) : 0
+  const overlay = 3 + (commentH ? commentH + 1 : 0)
+  const { width, height } = fitCanvas(cols, rows, overlay)
   const source = await resolveSource(opts.target, opts.demo, opts.fps)
   const frameSize = frameByteSize(width, height)
   const ffmpeg = spawnFfmpeg(source, width, height, opts.fps)
@@ -74,7 +74,7 @@ export async function play(opts: CliOptions, hooks: PlayHooks = {}): Promise<num
       if (opts.frames != null && frameIndex >= opts.frames) break
 
       while (paused && !quitting) {
-        draw(source, lastFrame, width, height, cols, frameIndex, opts.fps, true)
+        draw(source, lastFrame, width, height, cols, rows, frameIndex, opts.fps, true, comments, commentH)
         await sleep(80)
       }
       if (quitting) break
@@ -95,7 +95,7 @@ export async function play(opts: CliOptions, hooks: PlayHooks = {}): Promise<num
       nextDue += frameMs
 
       lastFrame = raw
-      draw(source, raw, width, height, cols, frameIndex, opts.fps, paused)
+      draw(source, raw, width, height, cols, rows, frameIndex, opts.fps, paused, comments, commentH)
       frameIndex += 1
     }
     if (frameIndex === 0) {
@@ -141,17 +141,20 @@ function draw(
   width: number,
   height: number,
   cols: number,
+  rows: number,
   frameIndex: number,
   fps: number,
   paused: boolean,
+  comments: string[],
+  commentH: number,
 ): void {
   const elapsed = frameIndex / fps
   const ratio = playheadRatio(elapsed, source.duration)
-  const title = truncateTitle(source.title, cols)
+  const title = truncateTitle(`영상 · ${source.title}`, cols)
   const art =
     rgb != null
       ? renderAscii(rgb, width, height)
-      : " ".repeat(Math.max(0, height / 2))
+      : Array.from({ length: Math.max(1, Math.floor(height / 2)) }, () => " ").join("\n")
   const gauge = renderGauge({
     ratio,
     elapsed,
@@ -160,9 +163,13 @@ function draw(
     paused,
   })
   const help = renderHelp(fps, cols)
-  process.stdout.write(
-    `${HOME}${WHITE}${title}${RESET}\n${art}\n${gauge}\n${help}`,
-  )
+  const lines = [title, ...art.split("\n"), gauge, help]
+  if (commentH > 0) {
+    lines.push(`댓글창 · [ ] 스크롤  ·  q 목록`)
+    const slice = comments.slice(0, Math.max(1, commentH - 1))
+    lines.push(...slice)
+  }
+  process.stdout.write(`\x1b[H${clampScreen(lines, rows, cols)}`)
 }
 
 function installTerminal(

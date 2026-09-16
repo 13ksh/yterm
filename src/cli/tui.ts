@@ -2,11 +2,13 @@ import {
   openCatalog,
   type ListState,
   type VideoItem,
+  type YoutubeCatalog,
 } from "../lib/youtube-catalog"
 import type { CliOptions } from "./args"
 import { KeyDecoder, isQuit, type Key } from "./keys"
 import { play } from "./player"
-import { renderTui, type TuiModel, type TuiView } from "./screen"
+import { commentLines, renderTui, type TuiModel, type TuiView } from "./screen"
+import { enableVt, termSize } from "./vt"
 
 const ALT_ON = "\x1b[?1049h"
 const ALT_OFF = "\x1b[?1049l"
@@ -23,6 +25,7 @@ type Session = {
   query: string
   composing: boolean
   comments: TuiModel["comments"]
+  commentsVideoId: string | null
   commentTitle: string
   commentOffset: number
   current: VideoItem | null
@@ -30,6 +33,7 @@ type Session = {
 }
 
 export async function runTui(opts: CliOptions): Promise<number> {
+  enableVt()
   const catalog = await openCatalog(Boolean(opts.demo))
   const session: Session = {
     catalog,
@@ -39,6 +43,7 @@ export async function runTui(opts: CliOptions): Promise<number> {
     query: "",
     composing: false,
     comments: [],
+    commentsVideoId: null,
     commentTitle: "",
     commentOffset: 0,
     current: catalog.selectedVideo(catalog.feed),
@@ -51,10 +56,7 @@ export async function runTui(opts: CliOptions): Promise<number> {
   let wake: (() => void) | null = null
   let keyQueue = Promise.resolve()
 
-  const size = () => ({
-    cols: opts.cols ?? process.stdout.columns ?? 80,
-    rows: opts.rows ?? process.stdout.rows ?? 24,
-  })
+  const size = () => termSize(opts.cols, opts.rows)
 
   const redraw = () => {
     const { cols, rows } = size()
@@ -182,18 +184,24 @@ export async function runTui(opts: CliOptions): Promise<number> {
       return
     }
 
+    if (key.name === "char" && (key.char === "[" || key.char === "]")) {
+      session.commentOffset = Math.max(
+        0,
+        session.commentOffset + (key.char === "]" ? 1 : -1),
+      )
+      return
+    }
+
     if (key.name === "up" || key.name === "down") {
-      if (session.view === "comments") {
-        session.commentOffset = Math.max(
-          0,
-          session.commentOffset + (key.name === "down" ? 1 : -1),
-        )
-        return
-      }
       const moved = catalog.move(session.list, key.name === "down" ? 1 : -1)
       if (moved) {
         session.current = catalog.selectedVideo(session.list)
-        session.status = `${session.current?.title ?? ""} · 아직 불러오지 않음`
+        if (session.commentsVideoId !== session.current?.videoId) {
+          session.comments = []
+          session.commentTitle = ""
+          session.commentOffset = 0
+        }
+        session.status = `${session.current?.title ?? ""}`
         void catalog.maybeLoadMore(session.list).then(() => redraw())
       }
       return
@@ -261,17 +269,16 @@ export async function runTui(opts: CliOptions): Promise<number> {
   async function openComments() {
     const item = session.current ?? catalog.selectedVideo(session.list)
     if (!item) return
-    session.status = `댓글 불러오는 중 · ${item.title}`
+    session.status = `댓글창 불러오는 중 · ${item.title}`
     redraw()
     try {
       const bundle = await catalog.openComments(item.videoId)
-      session.stack.push({ view: session.view, list: session.list })
-      session.view = "comments"
       session.comments = bundle.comments
+      session.commentsVideoId = item.videoId
       session.commentTitle = bundle.title || item.title
       session.commentOffset = 0
       session.current = item
-      session.status = `댓글 ${bundle.comments.length}개 · 첫 페이지만 · ${item.title}`
+      session.status = `댓글창 ${bundle.comments.length}개 · ${item.title}`
     } catch (err) {
       session.status = err instanceof Error ? err.message : String(err)
     }
@@ -280,8 +287,18 @@ export async function runTui(opts: CliOptions): Promise<number> {
   async function playSelected() {
     const item = session.current ?? catalog.selectedVideo(session.list)
     if (!item) return
-    session.status = `재생 · ${item.title}`
+    session.status = `영상 그리는 중 · ${item.title}`
     redraw()
+    let comments: string[] = []
+    try {
+      const bundle = await catalog.openComments(item.videoId)
+      session.comments = bundle.comments
+      session.commentsVideoId = item.videoId
+      session.commentTitle = bundle.title || item.title
+      comments = commentLines(bundle.comments, bundle.title || item.title, 60)
+    } catch {
+      comments = ["댓글창을 열지 못했습니다"]
+    }
     try {
       await play(
         {
@@ -294,6 +311,7 @@ export async function runTui(opts: CliOptions): Promise<number> {
         },
         {
           ownedScreen: true,
+          comments,
           onKey: (handler) => {
             playHandler = handler
             return () => {

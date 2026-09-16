@@ -1,8 +1,10 @@
 import { HELP, parseArgs } from "./args"
 import { play } from "./player"
 import { runTui } from "./tui"
+import { enableVt } from "./vt"
 
 async function main(): Promise<void> {
+  enableVt()
   let opts
   try {
     opts = parseArgs(process.argv.slice(2))
