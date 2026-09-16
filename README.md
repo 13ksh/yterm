@@ -62,7 +62,7 @@ yterm https://www.youtube.com/watch?v=VIDEO_ID
 | space | 재생 중 일시정지 | 없음 |
 | q | 종료 | 없음 |
 
-영상 파일은 저장하지 않습니다.
+영상 파일은 저장하지 않습니다. Enter 재생이 쿠키 오류면 **Chrome/Edge를 닫고** 다시 Enter 하세요. Firefox에 유튜브 로그인해 두어도 됩니다.
 
 개발 중:
 

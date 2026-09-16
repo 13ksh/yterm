@@ -12,6 +12,8 @@ export function charWidth(cp: number): number {
   if (cp === 0) return 0
   if (cp < 32 || (cp >= 0x7f && cp < 0xa0)) return 0
   if (cp >= 0x300 && cp <= 0x36f) return 0
+  if (cp === 0x200d || cp === 0xfe0f || cp === 0xfe0e) return 0
+  if (cp >= 0x1f3fb && cp <= 0x1f3ff) return 0
   if (isWide(cp)) return 2
   return 1
 }

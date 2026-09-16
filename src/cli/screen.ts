@@ -32,12 +32,14 @@ export function visibleLineCount(text: string): number {
 }
 
 export function clampScreen(lines: string[], rows: number, cols: number): string {
+  // Leave one column on Windows so a full-width line cannot auto-wrap.
+  const fit = process.platform === "win32" ? Math.max(1, cols - 1) : cols
   const out: string[] = []
   for (const line of lines) {
     if (out.length >= rows) break
-    out.push(padLine(line, cols))
+    out.push(padLine(line, fit))
   }
-  while (out.length < rows) out.push(padToWidth("", cols))
+  while (out.length < rows) out.push(padToWidth("", fit))
   const joiner = process.platform === "win32" ? "\r\n" : "\n"
   return out.slice(0, rows).join(joiner)
 }

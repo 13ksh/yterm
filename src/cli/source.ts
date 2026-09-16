@@ -3,6 +3,7 @@ import { existsSync, readdirSync } from "node:fs"
 import { homedir } from "node:os"
 import path from "node:path"
 import { parseVideoId } from "../lib/video-id"
+import { copiedBrowserCookieArgs } from "./cookies"
 
 export type PlaySource = {
   kind: "demo" | "file" | "youtube"
@@ -88,9 +89,9 @@ async function resolveYoutube(target: string): Promise<PlaySource> {
     })) as YtJson
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
-    if (/sign in|not a bot|cookies/i.test(message)) {
+    if (isRetryableYtError(message)) {
       throw new Error(
-        "유튜브가 봇 확인을 요구합니다. Edge나 Chrome에 유튜브 로그인한 뒤 이 창을 다시 열고 Enter 하세요.",
+        "Chrome/Edge가 켜져 있으면 쿠키를 못 읽습니다. 브라우저를 닫고 다시 Enter, 또는 Firefox에 유튜브 로그인하세요.",
       )
     }
     throw err
@@ -217,6 +218,12 @@ export function findFfprobe(): string {
   return process.env.FFPROBE || lookOnPath("ffprobe") || "ffprobe"
 }
 
+export function isRetryableYtError(message: string): boolean {
+  return /sign in|not a bot|cookie|confirm.*not.*bot|HTTP Error 403|Could not copy|locked|database|profile directory|bot check/i.test(
+    message,
+  )
+}
+
 function cookieArgSets(): string[][] {
   if (process.env.YT_DLP_COOKIES && existsSync(process.env.YT_DLP_COOKIES)) {
     return [["--cookies", process.env.YT_DLP_COOKIES]]
@@ -224,13 +231,13 @@ function cookieArgSets(): string[][] {
   if (process.env.YT_DLP_BROWSER) {
     return [["--cookies-from-browser", process.env.YT_DLP_BROWSER]]
   }
-  const browsers =
-    process.platform === "win32"
-      ? ["edge", "chrome", "firefox", "brave"]
-      : ["chrome", "chromium", "firefox", "brave"]
-  const fromBrowser = browsers.map((name) => ["--cookies-from-browser", name])
-  // Windows CMD users are logged into Edge/Chrome; try those before a cookieless dump.
-  return process.platform === "win32" ? [...fromBrowser, []] : [[], ...fromBrowser]
+  const copied = copiedBrowserCookieArgs()
+  const native = ["firefox", "edge", "chrome", "brave"].map((name) => [
+    "--cookies-from-browser",
+    name,
+  ])
+  // Cookieless first: home IPs often work. Copied Chrome DB next so the browser can stay open.
+  return [[], ...copied, ...native]
 }
 
 export type YtDlpJsonOpts = {
@@ -266,7 +273,7 @@ export async function ytdlpJson(
           : [
               "--no-playlist",
               "--extractor-args",
-              "youtube:player_client=android,web",
+              "youtube:player_client=tv,android,web",
             ]),
         ...cookies,
         ...extra,
@@ -280,9 +287,7 @@ export async function ytdlpJson(
     } catch (err) {
       lastErr = err instanceof Error ? err : new Error(String(err))
       const message = lastErr.message
-      const needCookies = /sign in|not a bot|cookies|confirm.*not.*bot|HTTP Error 403/i.test(
-        message,
-      )
+      const needCookies = isRetryableYtError(message)
       if (!needCookies) throw lastErr
     }
   }

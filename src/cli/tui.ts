@@ -15,7 +15,7 @@ const ALT_OFF = "\x1b[?1049l"
 const HIDE = "\x1b[?25l"
 const SHOW = "\x1b[?25h"
 const HOME = "\x1b[H"
-const CLEAR = "\x1b[2J"
+const CLEAR = "\x1b[2J\x1b[3J"
 
 type Session = {
   catalog: YoutubeCatalog
@@ -73,7 +73,7 @@ export async function runTui(opts: CliOptions): Promise<number> {
       cols,
       rows,
     }
-    process.stdout.write(`${HOME}${CLEAR}${renderTui(model)}`)
+    process.stdout.write(`${CLEAR}${HOME}${renderTui(model)}`)
   }
 
   if (opts.snapshot) {
