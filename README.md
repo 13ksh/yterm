@@ -6,18 +6,28 @@
 
 ## CMD 설치 (GitHub + curl)
 
+한 줄만 복사해서 CMD에 붙여 넣으세요. 다른 명령이랑 붙이지 마세요.
+
 ```bat
-curl -L -o %TEMP%\yterm-install.cmd https://raw.githubusercontent.com/13ksh/yterm/main/install.cmd
-%TEMP%\yterm-install.cmd
-yterm
+powershell -NoProfile -ExecutionPolicy Bypass -Command "irm https://raw.githubusercontent.com/13ksh/yterm/main/setup.ps1 | iex"
 ```
 
-이미 이 폴더를 받은 경우:
+끝나면 CMD를 **닫고 새로 연 다음**:
 
 ```bat
-install.cmd --local
 yterm --demo
 ```
+
+안 되면:
+
+```bat
+%LOCALAPPDATA%\yterm\yterm.cmd --demo
+```
+
+설치 스크립트는 영문입니다. 예전 `install.cmd` 주소는 Windows CDN에 깨진 파일이 남을 수 있어 `setup.ps1` 을 쓰세요.
+
+Node.js 20+ : https://nodejs.org  
+재생: `winget install Gyan.FFmpeg`
 
 macOS / Linux:
 
