@@ -65,14 +65,20 @@ echo node "%DEST%\bin\yterm.js" %%*>> "%SHIM%"
 copy /Y "%SHIM%" "%USERPROFILE%\yterm.cmd" >nul
 copy /Y "%SHIM%" "%LOCALAPPDATA%\Microsoft\WindowsApps\yterm.cmd" >nul 2>&1
 
-echo [4/4] ffmpeg
+echo [4/4] ffmpeg / yt-dlp
 where ffmpeg >nul 2>&1
 if errorlevel 1 echo ffmpeg missing. Run: winget install Gyan.FFmpeg
+where yt-dlp >nul 2>&1
+if errorlevel 1 (
+  where python >nul 2>&1
+  if not errorlevel 1 python -m pip install -U yt-dlp
+)
 
 echo.
 echo OK. Close this window, open a NEW CMD, then type:
-echo   yterm --demo
+echo   yterm
 echo Or:
-echo   "%SHIM%" --demo
+echo   "%SHIM%"
+echo Do not use --demo unless you want fake videos.
 echo.
 exit /b 0

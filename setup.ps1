@@ -67,13 +67,24 @@ Copy-Item $shim (Join-Path $env:USERPROFILE "yterm.cmd") -Force
 $apps = Join-Path $env:LOCALAPPDATA "Microsoft\WindowsApps\yterm.cmd"
 try { Copy-Item $shim $apps -Force } catch { }
 
-Write-Host "[4/4] ffmpeg"
+Write-Host "[4/4] ffmpeg / yt-dlp"
 if (-not (Get-Command ffmpeg -ErrorAction SilentlyContinue)) {
   Write-Host "ffmpeg missing. Run: winget install Gyan.FFmpeg"
+}
+if (-not (Get-Command yt-dlp -ErrorAction SilentlyContinue)) {
+  $py = Get-Command python -ErrorAction SilentlyContinue
+  if (-not $py) { $py = Get-Command py -ErrorAction SilentlyContinue }
+  if ($py) {
+    Write-Host "installing yt-dlp"
+    & $py.Source -m pip install -U yt-dlp
+  } else {
+    Write-Host "yt-dlp missing. Install Python then: python -m pip install -U yt-dlp"
+  }
 }
 
 Write-Host ""
 Write-Host "OK. Close CMD, open a NEW CMD, then:"
-Write-Host "  yterm --demo"
+Write-Host "  yterm"
 Write-Host "Or:"
-Write-Host "  $shim --demo"
+Write-Host "  $shim"
+Write-Host "Do not use --demo unless you want fake videos."

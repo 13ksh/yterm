@@ -2,14 +2,13 @@ import { spawnSync } from "node:child_process"
 
 let done = false
 
+export function useAltScreen(): boolean {
+  return process.platform !== "win32"
+}
+
 export function enableVt(): void {
   if (done) return
   done = true
-  try {
-    process.stdout.write("\x1b[?1049h")
-  } catch {
-    /* ignore */
-  }
   if (process.platform !== "win32") return
   try {
     spawnSync(

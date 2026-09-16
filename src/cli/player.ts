@@ -15,7 +15,7 @@ import {
   resolveSource,
   type PlaySource,
 } from "./source"
-import { enableVt, termSize } from "./vt"
+import { enableVt, termSize, useAltScreen } from "./vt"
 
 const HOME = "\x1b[H"
 const CLEAR = "\x1b[2J"
@@ -178,7 +178,8 @@ function installTerminal(
   onKey: (key: string) => void,
   hooks: PlayHooks = {},
 ): () => void {
-  if (!noAlt && !hooks.ownedScreen) process.stdout.write(ALT_ON)
+  const alt = !noAlt && !hooks.ownedScreen && useAltScreen()
+  if (alt) process.stdout.write(ALT_ON)
   process.stdout.write(HIDE)
 
   let rawOn = false
@@ -219,7 +220,7 @@ function installTerminal(
     }
     if (!hooks.ownedScreen) {
       process.stdout.write(SHOW)
-      if (!noAlt) process.stdout.write(ALT_OFF)
+      if (alt) process.stdout.write(ALT_OFF)
       else process.stdout.write("\n")
     }
   }

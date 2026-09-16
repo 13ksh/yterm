@@ -125,7 +125,7 @@ CMD에서 피드를 고르고, 선택한 영상만 재생합니다. 방향키는
   yterm
   yterm --demo
   yterm https://www.youtube.com/watch?v=VIDEO_ID
-  npm run yterm -- --demo --snapshot
+  npm run yterm -- --snapshot
 
 조작:
   ↑↓      목록 이동 (네트워크 없음)
@@ -138,7 +138,7 @@ CMD에서 피드를 고르고, 선택한 영상만 재생합니다. 방향키는
   q       종료
 
 옵션:
-  --demo          예시 피드 (유튜브가 막을 때)
+  --demo          가짜 예시 피드 (실제 유튜브 아님)
   --snapshot      피드 한 화면만 출력하고 종료
   --fps 8         초당 프레임. 기본 8
   --cols 80       가로 칸 수

@@ -8,7 +8,7 @@ import type { CliOptions } from "./args"
 import { KeyDecoder, isQuit, type Key } from "./keys"
 import { play } from "./player"
 import { commentLines, renderTui, type TuiModel, type TuiView } from "./screen"
-import { enableVt, termSize } from "./vt"
+import { enableVt, termSize, useAltScreen } from "./vt"
 
 const ALT_ON = "\x1b[?1049h"
 const ALT_OFF = "\x1b[?1049l"
@@ -98,12 +98,13 @@ export async function runTui(opts: CliOptions): Promise<number> {
 
   if (!process.stdin.isTTY) {
     process.stderr.write(
-      "이 화면은 CMD/터미널에서 실행하세요. 미리보기는 yterm --demo --snapshot\n",
+      "이 화면은 CMD/터미널에서 실행하세요. 미리보기는 yterm --snapshot\n",
     )
     return 1
   }
 
-  process.stdout.write(`${ALT_ON}${HIDE}${CLEAR}`)
+  const alt = useAltScreen()
+  process.stdout.write(`${alt ? ALT_ON : ""}${HIDE}${CLEAR}`)
   redraw()
 
   const onData = (chunk: Buffer) => {
@@ -343,6 +344,6 @@ export async function runTui(opts: CliOptions): Promise<number> {
       /* ignore */
     }
     process.stdin.pause()
-    process.stdout.write(`${SHOW}${ALT_OFF}`)
+    process.stdout.write(`${SHOW}${alt ? ALT_OFF : CLEAR}`)
   }
 }

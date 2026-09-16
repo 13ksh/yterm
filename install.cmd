@@ -96,7 +96,7 @@ if errorlevel 1 (
 echo.
 echo Installed.
 echo   yterm
-echo   yterm --demo
+echo Do not use --demo unless you want fake videos.
 echo.
 echo If 'yterm' is not found, open a NEW CMD window or run:
 echo   "%SHIM%"

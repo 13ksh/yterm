@@ -6,11 +6,13 @@ import {
   YoutubeCatalog,
   collectVideos,
   createDemoClient,
+  openCatalog,
   visibleWindow,
   type CatalogClient,
   type ListPage,
   type VideoItem,
 } from "./youtube-catalog"
+import { itemsFromYtDump } from "../cli/source"
 
 test("collectVideos reads videoRenderer and skips duplicates", () => {
   const data = {
@@ -106,3 +108,42 @@ test("visible window follows the cursor without extra fetches", () => {
   assert.equal(view.slice.length, 5)
   assert.ok(view.slice.some((item) => item.videoId === catalog.feed.items[6].videoId))
 })
+
+test("openCatalog(--demo) is the only fake feed", async () => {
+  const catalog = await openCatalog(true)
+  assert.equal(catalog.source, "demo")
+  assert.ok(catalog.feed.items.every((item) => item.demo))
+  assert.match(catalog.status, /실제 유튜브가 아닙니다/)
+})
+
+test("itemsFromYtDump reads real video ids from yt-dlp JSON", () => {
+  const items = itemsFromYtDump({
+    entries: [
+      {
+        id: "dQw4w9WgXcQ",
+        title: "Never Gonna Give You Up",
+        uploader: "Rick Astley",
+        duration: 213,
+        view_count: 1600000000,
+      },
+      { id: "short", title: "skip" },
+      {
+        id: "abcdefghijk",
+        title: "[Deleted video]",
+      },
+    ],
+    related_videos: [
+      {
+        id: "AAAAAAAAAAA",
+        title: "Related clip",
+        uploader: "Other",
+        duration: 12,
+      },
+    ],
+  })
+  assert.equal(items.length, 2)
+  assert.equal(items[0].videoId, "dQw4w9WgXcQ")
+  assert.equal(items[0].duration, "3:33")
+  assert.equal(items[1].videoId, "AAAAAAAAAAA")
+})
+

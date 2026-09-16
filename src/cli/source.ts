@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process"
-import { existsSync } from "node:fs"
+import { existsSync, readdirSync } from "node:fs"
 import { homedir } from "node:os"
 import path from "node:path"
 import { parseVideoId } from "../lib/video-id"
@@ -12,7 +12,13 @@ export type PlaySource = {
   prefixArgs: string[]
 }
 
+export type YtDlpBin = { cmd: string; prefix: string[] }
+
 const DEMO_SECONDS = 12
+const ID = /^[A-Za-z0-9_-]{11}$/
+
+let cachedBin: YtDlpBin | null = null
+let cachedCookies: string[] | null = null
 
 export function demoSource(fps: number): PlaySource {
   return {
@@ -50,49 +56,44 @@ export async function resolveSource(
 
   const videoId = parseVideoId(target)
   if (videoId || /^https?:\/\//i.test(target)) {
-    return resolveYoutube(target)
+    return resolveYoutube(videoId ? `https://www.youtube.com/watch?v=${videoId}` : target)
   }
 
   throw new Error(`파일을 찾을 수 없고 유튜브 주소도 아닙니다: ${target}`)
 }
 
 type YtJson = {
+  id?: string
   title?: string
   duration?: number | null
   url?: string
   http_headers?: Record<string, string>
   requested_downloads?: Array<{ url?: string; http_headers?: Record<string, string> }>
   entries?: YtJson[]
+  related_videos?: Array<{
+    id?: string
+    title?: string
+    uploader?: string
+    duration?: number
+  }>
 }
 
 async function resolveYoutube(target: string): Promise<PlaySource> {
-  const ytdlp = findYtDlp()
-  let raw: string
+  let parsed: YtJson
   try {
-    raw = await runCapture(ytdlp.cmd, [
-      ...ytdlp.prefix,
-      "-J",
-      "--no-playlist",
-      "--no-warnings",
-      "-f",
-      "b[height<=480]/b[height<=720]/b",
-      "--",
-      target,
-    ])
+    parsed = (await ytdlpJson(target, {
+      extra: ["-f", "b[height<=480]/b[height<=720]/b"],
+      playlist: false,
+      cookies: true,
+    })) as YtJson
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
     if (/sign in|not a bot|cookies/i.test(message)) {
       throw new Error(
-        "유튜브가 봇 확인을 요구합니다. 로컬 브라우저 쿠키를 yt-dlp에 넘기거나 --demo 로 플레이어를 확인하세요.",
+        "유튜브가 봇 확인을 요구합니다. Edge나 Chrome에 유튜브 로그인한 뒤 이 창을 다시 열고 Enter 하세요.",
       )
     }
     throw err
-  }
-  let parsed: YtJson
-  try {
-    parsed = JSON.parse(raw) as YtJson
-  } catch {
-    throw new Error("yt-dlp JSON을 읽지 못했습니다")
   }
   const info = parsed.entries?.[0] ?? parsed
   const download = info.requested_downloads?.[0]
@@ -123,27 +124,230 @@ async function resolveYoutube(target: string): Promise<PlaySource> {
   }
 }
 
-export function findYtDlp(): { cmd: string; prefix: string[] } {
-  const env = process.env.YT_DLP
-  if (env) return { cmd: env, prefix: [] }
+export function lookOnPath(name: string): string | null {
+  const dirs = (process.env.PATH ?? "").split(path.delimiter)
+  const exts =
+    process.platform === "win32" ? [".exe", ".cmd", ".bat", ""] : [""]
+  const wantsExt = path.extname(name) !== ""
+  for (const dir of dirs) {
+    if (!dir) continue
+    if (wantsExt) {
+      const full = path.join(dir, name)
+      if (existsSync(full)) return full
+      continue
+    }
+    for (const ext of exts) {
+      const full = path.join(dir, name + ext)
+      if (existsSync(full)) return full
+    }
+  }
+  return null
+}
 
-  const candidates = [
-    path.join(homedir(), ".local/bin/yt-dlp"),
+function extraYtDlpPaths(): string[] {
+  const home = homedir()
+  const found: string[] = [
+    path.join(home, ".local/bin/yt-dlp"),
+    path.join(home, ".local/bin/yt-dlp.exe"),
     "/usr/local/bin/yt-dlp",
     "/usr/bin/yt-dlp",
   ]
-  for (const cmd of candidates) {
+  if (process.platform === "win32") {
+    found.push(
+      path.join(home, "AppData/Local/Programs/yt-dlp/yt-dlp.exe"),
+      path.join(home, "scoop/apps/yt-dlp/current/yt-dlp.exe"),
+    )
+    for (const root of [
+      path.join(home, "AppData/Roaming/Python"),
+      path.join(home, "AppData/Local/Programs/Python"),
+    ]) {
+      try {
+        for (const dir of readdirSync(root, { withFileTypes: true })) {
+          if (!dir.isDirectory()) continue
+          found.push(path.join(root, dir.name, "Scripts", "yt-dlp.exe"))
+        }
+      } catch {
+        /* missing */
+      }
+    }
+  }
+  return found
+}
+
+function locateYtDlp(): YtDlpBin {
+  const env = process.env.YT_DLP
+  if (env) return { cmd: env, prefix: [] }
+
+  for (const cmd of extraYtDlpPaths()) {
     if (existsSync(cmd)) return { cmd, prefix: [] }
   }
+
+  const onPath = lookOnPath("yt-dlp")
+  if (onPath) return { cmd: onPath, prefix: [] }
+
+  const pythons: Array<[string, string[]]> =
+    process.platform === "win32"
+      ? [
+          ["py", ["-3", "-m", "yt_dlp"]],
+          ["python", ["-m", "yt_dlp"]],
+          ["python3", ["-m", "yt_dlp"]],
+        ]
+      : [
+          ["python3", ["-m", "yt_dlp"]],
+          ["python", ["-m", "yt_dlp"]],
+        ]
+  for (const [cmd, prefix] of pythons) {
+    const resolved = lookOnPath(cmd)
+    if (resolved) return { cmd: resolved, prefix }
+  }
+
   return { cmd: "yt-dlp", prefix: [] }
 }
 
+export function findYtDlp(): YtDlpBin {
+  if (!cachedBin) cachedBin = locateYtDlp()
+  return cachedBin
+}
+
 export function findFfmpeg(): string {
-  return process.env.FFMPEG || "ffmpeg"
+  return process.env.FFMPEG || lookOnPath("ffmpeg") || "ffmpeg"
 }
 
 export function findFfprobe(): string {
-  return process.env.FFPROBE || "ffprobe"
+  return process.env.FFPROBE || lookOnPath("ffprobe") || "ffprobe"
+}
+
+function cookieArgSets(): string[][] {
+  if (process.env.YT_DLP_COOKIES && existsSync(process.env.YT_DLP_COOKIES)) {
+    return [["--cookies", process.env.YT_DLP_COOKIES]]
+  }
+  if (process.env.YT_DLP_BROWSER) {
+    return [["--cookies-from-browser", process.env.YT_DLP_BROWSER]]
+  }
+  const browsers =
+    process.platform === "win32"
+      ? ["edge", "chrome", "firefox", "brave"]
+      : ["chrome", "chromium", "firefox", "brave"]
+  const fromBrowser = browsers.map((name) => ["--cookies-from-browser", name])
+  // Windows CMD users are logged into Edge/Chrome; try those before a cookieless dump.
+  return process.platform === "win32" ? [...fromBrowser, []] : [[], ...fromBrowser]
+}
+
+export type YtDlpJsonOpts = {
+  extra?: string[]
+  playlist?: boolean
+  cookies?: boolean
+}
+
+export async function ytdlpJson(
+  target: string,
+  opts: YtDlpJsonOpts = {},
+): Promise<unknown> {
+  const bin = findYtDlp()
+  const extra = opts.extra ?? []
+  const sets =
+    opts.cookies === false
+      ? cachedCookies
+        ? [cachedCookies]
+        : [[]]
+      : cachedCookies
+        ? [cachedCookies, ...cookieArgSets().filter((s) => s.join() !== cachedCookies?.join())]
+        : cookieArgSets()
+
+  let lastErr: Error | null = null
+  for (const cookies of sets) {
+    try {
+      const args = [
+        ...bin.prefix,
+        "-J",
+        "--no-warnings",
+        ...(opts.playlist
+          ? []
+          : [
+              "--no-playlist",
+              "--extractor-args",
+              "youtube:player_client=android,web",
+            ]),
+        ...cookies,
+        ...extra,
+        "--",
+        target,
+      ]
+      const raw = await runCapture(bin.cmd, args)
+      const parsed: unknown = JSON.parse(raw)
+      if (cookies.length) cachedCookies = cookies
+      return parsed
+    } catch (err) {
+      lastErr = err instanceof Error ? err : new Error(String(err))
+      const message = lastErr.message
+      const needCookies = /sign in|not a bot|cookies|confirm.*not.*bot|HTTP Error 403/i.test(
+        message,
+      )
+      if (!needCookies) throw lastErr
+    }
+  }
+  throw lastErr ?? new Error("yt-dlp JSON을 읽지 못했습니다")
+}
+
+export function itemsFromYtDump(data: unknown): Array<{
+  videoId: string
+  title: string
+  channel: string
+  meta: string
+  duration: string
+}> {
+  if (!data || typeof data !== "object") return []
+  const obj = data as YtJson & { uploader?: string; channel?: string; view_count?: number }
+  const bucket: unknown[] = []
+  if (Array.isArray(obj.entries)) bucket.push(...obj.entries)
+  else bucket.push(obj)
+  if (Array.isArray(obj.related_videos)) bucket.push(...obj.related_videos)
+
+  const seen = new Set<string>()
+  const items: Array<{
+    videoId: string
+    title: string
+    channel: string
+    meta: string
+    duration: string
+  }> = []
+  for (const raw of bucket) {
+    if (!raw || typeof raw !== "object") continue
+    const row = raw as YtJson & {
+      ie_key?: string
+      uploader?: string
+      channel?: string
+      view_count?: number
+    }
+    const videoId = String(row.id ?? "")
+    if (!ID.test(videoId) || seen.has(videoId)) continue
+    const title = String(row.title ?? "").replace(/\s+/g, " ").trim()
+    if (!title || title === "[Deleted video]" || title === "[Private video]") continue
+    seen.add(videoId)
+    const channel = String(row.uploader ?? row.channel ?? "").replace(/^@/, "")
+    const views =
+      typeof row.view_count === "number" && Number.isFinite(row.view_count)
+        ? `조회 ${row.view_count.toLocaleString("ko-KR")}회`
+        : ""
+    items.push({
+      videoId,
+      title,
+      channel,
+      meta: views,
+      duration: formatDuration(row.duration),
+    })
+  }
+  return items
+}
+
+function formatDuration(sec: unknown): string {
+  if (typeof sec !== "number" || !Number.isFinite(sec) || sec < 0) return ""
+  const total = Math.floor(sec)
+  const h = Math.floor(total / 3600)
+  const m = Math.floor((total % 3600) / 60)
+  const s = total % 60
+  if (h > 0) return `${h}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`
+  return `${m}:${String(s).padStart(2, "0")}`
 }
 
 async function probeDuration(inputArgs: string[]): Promise<number | null> {
@@ -188,14 +392,24 @@ export function ffmpegRawArgs(
   ]
 }
 
+function extraPath(): string {
+  const home = homedir()
+  const extra = [
+    path.join(home, ".local/bin"),
+    path.join(home, "AppData/Local/Microsoft/WindowsApps"),
+  ]
+  return [...extra, process.env.PATH ?? ""].join(path.delimiter)
+}
+
 function runCapture(cmd: string, args: string[]): Promise<string> {
   return new Promise((resolve, reject) => {
     const child = spawn(cmd, args, {
       stdio: ["ignore", "pipe", "pipe"],
       env: {
         ...process.env,
-        PATH: `${path.join(homedir(), ".local/bin")}:${process.env.PATH ?? ""}`,
+        PATH: extraPath(),
       },
+      windowsHide: true,
     })
     const stdout: Buffer[] = []
     const stderr: Buffer[] = []

@@ -1,6 +1,7 @@
 import { visibleWindow, type ListState } from "../lib/youtube-catalog"
 import { truncateTitle } from "./gauge"
 import { buildForest, renderTree, type FlatComment } from "../lib/tree"
+import { clipToWidth, displayWidth, padToWidth, stripAnsi } from "./width"
 
 const RESET = "\x1b[0m"
 const RED = "\x1b[38;2;255;0;0m"
@@ -8,7 +9,6 @@ const WHITE = "\x1b[38;2;241;241;241m"
 const DIM = "\x1b[38;2;140;140;140m"
 const HILITE_BG = "\x1b[48;2;40;0;0m"
 const HILITE_FG = "\x1b[38;2;255;255;255m"
-const LINE = "─"
 
 export type TuiView = "feed" | "related" | "comments" | "search"
 
@@ -28,7 +28,7 @@ export type TuiModel = {
 
 export function visibleLineCount(text: string): number {
   if (!text) return 0
-  return text.split("\n").length
+  return text.split(/\r?\n/).length
 }
 
 export function clampScreen(lines: string[], rows: number, cols: number): string {
@@ -37,8 +37,9 @@ export function clampScreen(lines: string[], rows: number, cols: number): string
     if (out.length >= rows) break
     out.push(padLine(line, cols))
   }
-  while (out.length < rows) out.push(" ".repeat(cols))
-  return out.slice(0, rows).join("\n")
+  while (out.length < rows) out.push(padToWidth("", cols))
+  const joiner = process.platform === "win32" ? "\r\n" : "\n"
+  return out.slice(0, rows).join(joiner)
 }
 
 export function commentLines(
@@ -55,7 +56,7 @@ export function commentLines(
     showLikes: true,
   })
     .split("\n")
-    .map((line) => clipWidth(line, width))
+    .map((line) => clipToWidth(line, width))
 }
 
 export function renderTui(model: TuiModel): string {
@@ -97,7 +98,10 @@ function renderHeader(model: TuiModel, cols: number): string {
             ? `검색: ${model.query}_`
             : model.list.title
           : model.list.title
-  return `${RED}▶${RESET} ${WHITE}ASCII 유튜브${RESET}  ${DIM}${tag}${RESET}  ${title}`
+  return clipToWidth(
+    `${RED}▶${RESET} ${WHITE}ASCII 유튜브${RESET}  ${DIM}${tag}${RESET}  ${title}`,
+    cols,
+  )
 }
 
 function renderFooter(model: TuiModel, cols: number): string {
@@ -141,8 +145,10 @@ function renderRow(
   const dur = item.duration ? ` ${item.duration}` : ""
   const channel = item.channel ? `  ${item.channel}` : ""
   const plain = `${marker} ${num} ${item.title}${dur}${channel}`
-  const clipped = clipWidth(plain, cols)
-  if (selected) return `${HILITE_BG}${HILITE_FG}${clipped.padEnd(cols, " ")}${RESET}`
+  const clipped = clipToWidth(plain, cols)
+  if (selected) {
+    return `${HILITE_BG}${HILITE_FG}${padToWidth(clipped, cols)}${RESET}`
+  }
   return `${WHITE}${clipped}${RESET}`
 }
 
@@ -152,25 +158,16 @@ function padBlock(lines: string[], cols: number, rows: number): string[] {
   return out.slice(0, rows)
 }
 
-function clipWidth(text: string, width: number): string {
-  if (width <= 0) return ""
-  if (text.length <= width) return text
-  if (width === 1) return "…"
-  return `${text.slice(0, width - 1)}…`
-}
-
 export function visibleLen(text: string): number {
-  return text.replace(/\x1b\[[0-9;]*m/g, "").length
+  return displayWidth(text)
 }
 
 function padLine(text: string, cols: number): string {
-  const len = visibleLen(text)
-  if (len === cols) return text
-  if (len > cols) {
-    const plain = text.replace(/\x1b\[[0-9;]*m/g, "")
-    return `${clipWidth(plain, cols)}${RESET}`
+  const plain = stripAnsi(text)
+  const width = displayWidth(plain)
+  if (width === cols) return text
+  if (width > cols) {
+    return `${clipToWidth(plain, cols)}${RESET}`
   }
-  return text + " ".repeat(cols - len)
+  return text + " ".repeat(cols - width)
 }
-
-void LINE

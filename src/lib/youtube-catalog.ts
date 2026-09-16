@@ -1,3 +1,4 @@
+import { itemsFromYtDump, ytdlpJson } from "../cli/source"
 import { DEMO_COMMENTS, DEMO_TITLE } from "./demo"
 import { fetchVideoComments } from "./fetch-comments"
 import type { FlatComment } from "./tree"
@@ -291,9 +292,134 @@ let cachedCfg: Json | null = null
 
 async function sessionCfg(): Promise<Json> {
   if (cachedCfg) return cachedCfg
-  const html = await fetchYoutubeHtml("https://www.youtube.com/feed/trending?hl=ko&gl=KR")
+  const html = await fetchYoutubeHtml("https://www.youtube.com/?hl=ko&gl=KR")
   cachedCfg = extractYtCfg(html)
   return cachedCfg
+}
+
+export function createYtdlpClient(): CatalogClient {
+  return {
+    async trending() {
+      const data = await ytdlpJson("ytsearch24:인기 급상승", {
+        extra: ["--flat-playlist"],
+        playlist: true,
+        cookies: true,
+      })
+      const items = itemsFromYtDump(data).map(toVideoItem)
+      return {
+        items,
+        continuation: items.length >= 16 ? `ytdlp:${items.length}` : null,
+      }
+    },
+    async more(token) {
+      if (!token.startsWith("ytdlp:")) return { items: [], continuation: null }
+      const start = Number(token.slice("ytdlp:".length))
+      if (!Number.isFinite(start) || start < 0) return { items: [], continuation: null }
+      const data = await ytdlpJson(`ytsearch${start + 24}:인기 급상승`, {
+        extra: ["--flat-playlist"],
+        playlist: true,
+        cookies: true,
+      })
+      const items = itemsFromYtDump(data)
+        .map(toVideoItem)
+        .slice(start)
+      return {
+        items,
+        continuation: items.length ? `ytdlp:${start + items.length}` : null,
+      }
+    },
+    async related(videoId) {
+      const data = await ytdlpJson(`https://www.youtube.com/watch?v=${videoId}`, {
+        playlist: false,
+        cookies: true,
+      })
+      const items = itemsFromYtDump(data)
+        .map(toVideoItem)
+        .filter((item) => item.videoId !== videoId)
+      return { items, continuation: null }
+    },
+    async search(query) {
+      const data = await ytdlpJson(`ytsearch20:${query.trim()}`, {
+        extra: ["--flat-playlist"],
+        playlist: true,
+        cookies: true,
+      })
+      return { items: itemsFromYtDump(data).map(toVideoItem), continuation: null }
+    },
+    async comments(videoId) {
+      const result = await fetchVideoComments({
+        videoId,
+        sort: "popular",
+        preview: true,
+      })
+      return {
+        title: result.title,
+        channel: result.channel,
+        comments: result.comments,
+      }
+    },
+  }
+}
+
+function toVideoItem(row: ReturnType<typeof itemsFromYtDump>[number]): VideoItem {
+  return {
+    videoId: row.videoId,
+    title: row.title,
+    channel: row.channel,
+    meta: row.meta,
+    duration: row.duration,
+  }
+}
+
+export function createHybridClient(): CatalogClient {
+  const live = createLiveClient()
+  const ytdlp = createYtdlpClient()
+  return {
+    async trending() {
+      try {
+        const page = await live.trending()
+        if (page.items.length > 0) return page
+      } catch {
+        /* yt-dlp */
+      }
+      return ytdlp.trending()
+    },
+    async more(token) {
+      if (token.startsWith("ytdlp:") || token.startsWith("demo:")) {
+        return ytdlp.more(token)
+      }
+      try {
+        return await live.more(token)
+      } catch {
+        return ytdlp.more(token)
+      }
+    },
+    async related(videoId) {
+      try {
+        const page = await live.related(videoId)
+        if (page.items.length > 0) return page
+      } catch {
+        /* yt-dlp */
+      }
+      return ytdlp.related(videoId)
+    },
+    async search(query) {
+      try {
+        const page = await live.search(query)
+        if (page.items.length > 0) return page
+      } catch {
+        /* yt-dlp */
+      }
+      return ytdlp.search(query)
+    },
+    async comments(videoId) {
+      try {
+        return await live.comments(videoId)
+      } catch {
+        return ytdlp.comments(videoId)
+      }
+    },
+  }
 }
 
 export function createLiveClient(): CatalogClient {
@@ -304,20 +430,35 @@ export function createLiveClient(): CatalogClient {
       )
       cachedCfg = extractYtCfg(html)
       const data = extractYtInitialData(html)
-      return {
-        items: collectVideos(data),
-        continuation: firstContinuationToken(data),
+      let items = collectVideos(data)
+      let continuation = firstContinuationToken(data)
+      if (items.length === 0) {
+        const searched = await innertubePost(cachedCfg, "/youtubei/v1/search", {
+          query: "인기 급상승",
+        })
+        if (searched) {
+          items = collectVideos(searched)
+          const token = firstContinuationToken(searched)
+          continuation = token ? `search:${token}` : null
+        }
       }
+      return { items, continuation }
     },
     async more(token) {
       const ytcfg = await sessionCfg()
-      const data = await innertubePost(ytcfg, "/youtubei/v1/browse", {
-        continuation: token,
-      })
+      const searchToken = token.startsWith("search:") ? token.slice(7) : null
+      const data = searchToken
+        ? await innertubePost(ytcfg, "/youtubei/v1/search", {
+            continuation: searchToken,
+          })
+        : await innertubePost(ytcfg, "/youtubei/v1/browse", {
+            continuation: token,
+          })
       if (!data) return { items: [], continuation: null }
+      const next = firstContinuationToken(data)
       return {
         items: collectVideos(data),
-        continuation: firstContinuationToken(data),
+        continuation: searchToken ? (next ? `search:${next}` : null) : next,
       }
     },
     async related(videoId) {
@@ -543,22 +684,24 @@ export async function openCatalog(forceDemo: boolean): Promise<YoutubeCatalog> {
   if (forceDemo) {
     const catalog = new YoutubeCatalog(createDemoClient())
     catalog.source = "demo"
-    catalog.status = "예시 피드 · 방향키는 목록만 움직입니다"
+    catalog.status = "예시 피드 · 실제 유튜브가 아닙니다 (--demo)"
     await catalog.ensureFeed()
     return catalog
   }
+  const live = new YoutubeCatalog(createHybridClient())
+  live.source = "live"
   try {
-    const live = new YoutubeCatalog(createLiveClient())
-    live.source = "live"
     await live.ensureFeed()
-    if (live.feed.items.length === 0) throw new Error("empty")
-    live.status = "인기 급상승 · 방향키로는 불러오지 않습니다"
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    live.status = `유튜브 피드를 못 불러왔습니다. ${message}`
     return live
-  } catch {
-    const catalog = new YoutubeCatalog(createDemoClient())
-    catalog.source = "demo"
-    catalog.status = "유튜브 피드 대신 예시 · 방향키는 목록만 움직입니다"
-    await catalog.ensureFeed()
-    return catalog
   }
+  if (live.feed.items.length === 0) {
+    live.status =
+      "유튜브 피드가 비었습니다. yt-dlp 설치 후 브라우저에 유튜브 로그인한 뒤 다시 실행하세요."
+    return live
+  }
+  live.status = "인기 급상승 · 실제 유튜브 · 방향키로는 불러오지 않습니다"
+  return live
 }

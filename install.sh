@@ -60,5 +60,5 @@ fi
 echo
 echo "설치됨. PATH 에 ${BIN} 이 있으면:"
 echo "  yterm"
-echo "  yterm --demo"
+echo "실제 유튜브 피드입니다. 가짜 목록은 --demo 입니다."
 echo

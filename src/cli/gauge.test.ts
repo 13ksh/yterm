@@ -80,4 +80,5 @@ test("paused gauge appends 일시정지", () => {
 test("truncateTitle ellipsizes", () => {
   assert.equal(truncateTitle("짧은 제목", 20), "짧은 제목")
   assert.equal(truncateTitle("abcdefghij", 6), "abcde…")
+  assert.equal(truncateTitle("한글한글한글", 5), "한글…")
 })
